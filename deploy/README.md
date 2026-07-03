@@ -37,13 +37,13 @@ The proxy image is built from [`../Dockerfile`](../Dockerfile) (multi-stage Go
 build → distroless static, non-root, exposes **6379** for RESP2 and **9121**
 for `/metrics` + `/healthz`, requirement 18.5).
 
-Because `redimos/go.mod` pins the fork with `replace github.com/aura-studio/redimo
-=> ../redimo`, **the Docker build context must be the parent directory** that
-contains both `redimos/` and `redimo/`:
+The redimo dependency is pinned in `go.mod` to the published tag
+`github.com/aura-studio/redimo v1.7.0` and resolves from the Go module proxy,
+so the build context is simply the redimos repository root:
 
 ```bash
-# from the workspace directory that holds redimos/ and redimo/
-docker build -f redimos/Dockerfile -t redimos:latest .
+# from the redimos repository root
+docker build -t redimos:latest .
 
 # tag + push to ECR (example)
 docker tag redimos:latest 123456789012.dkr.ecr.us-east-1.amazonaws.com/redimos:latest

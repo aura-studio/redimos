@@ -9,16 +9,10 @@
 #   2. `final`  - copies only the binary into a distroless static image that
 #                 runs as a non-root user and exposes the RESP2 port 6379.
 #
-# IMPORTANT - build context:
-#   redimos/go.mod pins the redimo fork with a local replace directive:
-#       replace github.com/aura-studio/redimo => ../redimo
-#   Therefore the Docker build context MUST be the PARENT directory that holds
-#   both `redimos/` and `redimo/`. Build from that parent directory:
+# Build context is the redimos repository root; the redimo dependency resolves
+# from the Go module proxy (github.com/aura-studio/redimo tag v1.7.0):
 #
-#       docker build -f redimos/Dockerfile -t redimos:latest .
-#
-#   (running `docker build .` from inside redimos/ will fail because ../redimo
-#   is outside the context.)
+#     docker build -t redimos:latest .
 # =============================================================================
 
 # ----------------------------- build stage ----------------------------------
@@ -30,16 +24,12 @@ RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 
-# Copy the sibling redimo fork first so the ../redimo replace target resolves.
-COPY redimo/ ./redimo/
-
-# Copy the redimos module. Manifests first to leverage layer caching for deps.
-COPY redimos/go.mod redimos/go.sum ./redimos/
-WORKDIR /src/redimos
+# Manifests first to leverage layer caching for deps.
+COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 # Now copy the full redimos source and build.
-COPY redimos/ ./
+COPY . ./
 
 # Static, stripped binary: no CGO, trimmed paths, no symbol/debug tables.
 ARG TARGETOS=linux
