@@ -1273,69 +1273,102 @@ func (s *redimoStore) HStrlen(_ context.Context, pk, field string) (int, error) 
 	return len(rv.Bytes()), nil
 }
 
-func (s *redimoStore) HIncrBy(_ context.Context, pk, field string, delta int64) (int64, bool, error) {
+func (s *redimoStore) HIncrBy(_ context.Context, pk, field string, delta int64) (newVal int64, isNew bool, err error) {
 	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
 	// context.TODO() internally.
 	//
-	// Read-modify-write reconciliation (see the Store interface Hash doc and the
-	// String INCR-family note): read the current binary field value, parse it as a
-	// Redis integer, apply the delta, and store the decimal result back as the
-	// same binary attribute HGET reads. isNew reports whether the field was created
-	// by this call so the caller bumps cnt only for a brand-new field.
-	rv, err := s.client.HGET(pk, field)
-	if err != nil {
-		return 0, false, err
-	}
-
-	existed := !rv.Empty()
-	var cur int64
-	if existed {
-		cur, err = parseStoredInt(rv.Bytes())
-		if err != nil {
-			return 0, false, ErrHashNotInteger
+	// Read-modify-write reconciliation driven by a compare-and-set retry loop,
+	// mirroring the String INCR family (IncrBy): HGET the current binary field
+	// value, parse it as a Redis integer, apply the delta, and conditionally HSET
+	// the decimal result on the value the read observed. Two connections
+	// incrementing the same field concurrently cannot lose an update — the loser's
+	// HSETCAS condition fails and casRetry re-reads and re-applies its delta on the
+	// winner's value (requirements 16.3, 16.4). isNew reports whether this call
+	// created the field so the caller bumps cnt only for a brand-new field; it
+	// reflects the pre-state observed on the winning attempt. A run that exhausts
+	// the retry bound surfaces ErrRMWMaxRetries.
+	err = casRetry(func() (bool, error) {
+		rv, gerr := s.client.HGET(pk, field)
+		if gerr != nil {
+			return false, gerr
 		}
-	}
 
-	if (delta > 0 && cur > math.MaxInt64-delta) || (delta < 0 && cur < math.MinInt64-delta) {
-		return 0, false, ErrIncrOverflow
-	}
-	next := cur + delta
+		existed := !rv.Empty()
+		var (
+			cur    int64
+			oldVal []byte
+		)
+		if existed {
+			oldVal = rv.Bytes()
+			cur, gerr = parseStoredInt(oldVal)
+			if gerr != nil {
+				return false, ErrHashNotInteger
+			}
+		}
 
-	if _, err := s.client.HSET(pk, field, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}); err != nil {
-		return 0, false, err
-	}
+		if (delta > 0 && cur > math.MaxInt64-delta) || (delta < 0 && cur < math.MinInt64-delta) {
+			return false, ErrIncrOverflow
+		}
+		next := cur + delta
 
-	return next, !existed, nil
+		ok, serr := s.client.HSETCAS(pk, field, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, redimo.BytesValue{B: oldVal}, existed)
+		if serr != nil {
+			return false, serr
+		}
+		if ok {
+			newVal = next
+			isNew = !existed
+		}
+
+		return ok, nil
+	})
+
+	return newVal, isNew, err
 }
 
-func (s *redimoStore) HIncrByFloat(_ context.Context, pk, field string, delta float64) ([]byte, bool, error) {
+func (s *redimoStore) HIncrByFloat(_ context.Context, pk, field string, delta float64) (newVal []byte, isNew bool, err error) {
 	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Read-modify-write reconciliation as for HIncrBy.
-	rv, err := s.client.HGET(pk, field)
-	if err != nil {
-		return nil, false, err
-	}
-
-	existed := !rv.Empty()
-	var cur float64
-	if existed {
-		cur, err = parseStoredFloat(rv.Bytes())
-		if err != nil {
-			return nil, false, ErrHashNotFloat
+	// context.TODO() internally. Read-modify-write reconciliation as for HIncrBy:
+	// the HGET → HSETCAS compare-and-set loop makes concurrent HINCRBYFLOAT on one
+	// field lose no update (requirements 16.3, 16.4).
+	err = casRetry(func() (bool, error) {
+		rv, gerr := s.client.HGET(pk, field)
+		if gerr != nil {
+			return false, gerr
 		}
-	}
 
-	next := cur + delta
-	if math.IsNaN(next) || math.IsInf(next, 0) {
-		return nil, false, ErrIncrNaNOrInfinity
-	}
+		existed := !rv.Empty()
+		var (
+			cur    float64
+			oldVal []byte
+		)
+		if existed {
+			oldVal = rv.Bytes()
+			cur, gerr = parseStoredFloat(oldVal)
+			if gerr != nil {
+				return false, ErrHashNotFloat
+			}
+		}
 
-	out := formatRedisFloat(next)
-	if _, err := s.client.HSET(pk, field, redimo.BytesValue{B: out}); err != nil {
-		return nil, false, err
-	}
+		next := cur + delta
+		if math.IsNaN(next) || math.IsInf(next, 0) {
+			return false, ErrIncrNaNOrInfinity
+		}
 
-	return out, !existed, nil
+		out := formatRedisFloat(next)
+		ok, serr := s.client.HSETCAS(pk, field, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, existed)
+		if serr != nil {
+			return false, serr
+		}
+		if ok {
+			newVal = out
+			isNew = !existed
+		}
+
+		return ok, nil
+	})
+
+	return newVal, isNew, err
 }
 
 // --- Set data operations (task 14.1) ---------------------------------------

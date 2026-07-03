@@ -79,22 +79,36 @@ func (r *Router) handleGet(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	pk := encodePK(c.DB(), args[1])
 
-	res, live, err := meta.ReadPath(ctx, r.Storage.Reader, pk,
-		func(ctx context.Context) (strData, error) {
-			v, found, e := r.Storage.Store.GetString(ctx, pk)
-			return strData{val: v, found: found}, e
-		})
+	// A live key of a non-String type must reply WRONGTYPE, not the null bulk
+	// string — GET is type-checked from the key's meta exactly like its String
+	// siblings STRLEN and GETRANGE. An absent or expired key, or a live String
+	// whose value item is missing (e.g. a partial write that never landed), replies
+	// "$-1"; an empty String value replies the empty bulk string.
+	m, ok, err := r.Storage.Meta.Load(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
+	if !ok || meta.IsExpired(m, r.now()) {
+		w.NullBulk()
+		return
+	}
+	if m.Type != meta.TypeString {
+		w.Error(resp.ErrWrongType)
+		return
+	}
 
-	if !live || !res.found {
+	v, found, err := r.Storage.Store.GetString(ctx, pk)
+	if err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	if !found {
 		w.NullBulk()
 		return
 	}
 
-	w.BulkString(res.val)
+	w.BulkString(v)
 }
 
 // setOptions holds the parsed SET optional arguments.
