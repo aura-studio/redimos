@@ -3,7 +3,6 @@ module github.com/aura-studio/redimos/v2
 go 1.24
 
 require (
-	github.com/aura-studio/redimo v1.7.1
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.27
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.59.2
@@ -16,6 +15,7 @@ require (
 )
 
 require (
+	github.com/aura-studio/redimo/v2 v2.0.0
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.26 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.30 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.30 // indirect

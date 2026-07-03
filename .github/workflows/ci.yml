@@ -4,9 +4,10 @@ name: CI
 #
 # Two responsibilities (see design.md "两项目布局" / Testing Strategy "redimo fork 回归"):
 #   1. redimo-fork-regression: pin the redimo fork to a LOCKED commit (tracking the
-#      v1.7 branch) and run its Strings / Hashes / Lists / Sets / SortedSets data
-#      structure regression tests. The fork is still stabilizing hashes/lists, so we
-#      lock the commit and keep these regression tests green as a gate.
+#      v2.0 branch, module github.com/aura-studio/redimo/v2) and run its Strings /
+#      Hashes / Lists / Sets / SortedSets data structure regression tests. The fork
+#      is still stabilizing hashes/lists, so we lock the commit and keep these
+#      regression tests green as a gate.
 #   2. redimos-build-test: build and test the redimos proxy module itself.
 #
 # 需求: 术语表 Redimo_Store
@@ -18,11 +19,11 @@ on:
     branches: [ main, master ]
 
 env:
-  # redimo fork pinned reference (LOCKED commit = tag v1.7.1 on the v1.7 branch).
+  # redimo fork pinned reference (LOCKED commit = tag v2.0.0 on the v2.0 branch).
   # Update this together with the redimo version required in the redimos go.mod
   # whenever the fork is intentionally bumped.
   REDIMO_REPO: aura-studio/redimo
-  REDIMO_REF: c23c940542dbe8a3ad1ea7fc7daf266ad21d9914
+  REDIMO_REF: d49029d1ab5ee67a613bdf7a52246bea69b3d327
 
 jobs:
   redimo-fork-regression:
@@ -70,7 +71,7 @@ jobs:
       - name: Run Strings / Hashes / Lists / Sets / SortedSets regression tests
         working-directory: redimo
         run: |
-          go test -v -count=1 -run '^(TestBasic|TestGETSET|TestCounters|TestAtomicOps|TestBasicHashes|TestAtomicHashOps|TestHashCounters|TestLBasics|TestRPOPLPUSH|TestListIndexBasedCRUD|TestListValueBasedCRUD|TestConcurrent.*|TestSingleThread|TestMultiThread|TestBasicSets|TestSetOperations|TestSetModifiers|TestZBasic|TestZPops|TestZRanges|TestZCounts|TestZAggregations)$' .
+          go test -v -count=1 -run '^(TestBasic|TestGETSET|TestCounters|TestAtomicOps|TestBasicHashes|TestAtomicHashOps|TestHashCounters|TestHSETCAS|TestHMGETDuplicateFields|TestLBasics|TestRPOPLPUSH|TestListIndexBasedCRUD|TestListValueBasedCRUD|TestConcurrent.*|TestSingleThread|TestMultiThread|TestBasicSets|TestSetOperations|TestSetModifiers|TestZBasic|TestZPops|TestZRanges|TestZCounts|TestZAggregations)$' .
 
   redimos-build-test:
     name: redimos build & test
