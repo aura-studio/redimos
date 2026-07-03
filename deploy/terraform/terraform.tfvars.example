@@ -1,0 +1,50 @@
+# Copy to terraform.tfvars and fill in for your environment.
+
+region     = "us-east-1"
+vpc_id     = "vpc-0123456789abcdef0"
+
+# At least two subnets in distinct AZs (requirement 18.1). Private subnets.
+private_subnet_ids = [
+  "subnet-0aaa1111bbbb2222c", # AZ a
+  "subnet-0ddd3333eeee4444f", # AZ b
+]
+
+# Container image the ECS task runs. Push the image built from redimos/Dockerfile
+# to ECR (or another registry) and reference it here.
+image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/redimos:latest"
+
+# DynamoDB single table name (matches -table default in the proxy).
+table_name = "redis-data"
+
+# Multi-AZ: keep >= 2.
+desired_count = 2
+
+# Only VPC/client CIDRs may reach the internal NLB. Do NOT use 0.0.0.0/0.
+allowed_ingress_cidrs = ["10.0.0.0/16"]
+
+# Fargate sizing.
+task_cpu    = 512
+task_memory = 1024
+
+consistency = "strong"
+
+# Observability port serving /metrics and /healthz (requirement 18.5). Scraped
+# by the metrics pipeline from within the VPC; not fronted by the NLB.
+metrics_port = 9121
+
+# --- CloudWatch alarms (task 24.2) -------------------------------------------
+# SNS topics notified on ALARM/OK. Leave empty to create alarms with no action.
+alarm_sns_topic_arns = [
+  # "arn:aws:sns:us-east-1:123456789012:redimos-alerts",
+]
+
+# DynamoDB (native metrics) - on-demand tables should see ~0 sustained values.
+throttled_requests_threshold = 1
+system_errors_threshold      = 1
+
+# Proxy alarms read a custom namespace populated by the metrics pipeline
+# (Prometheus scrape -> ADOT/CloudWatch agent). Set false until it exists.
+enable_custom_metric_alarms   = true
+proxy_metrics_namespace       = "redimos"
+p99_latency_threshold_seconds = 0.05 # 50ms; design budget p99 ~10-20ms
+delete_queue_backlog_threshold = 512 # half the deleter's 1024 default capacity

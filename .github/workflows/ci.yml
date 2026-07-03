@@ -1,0 +1,100 @@
+name: CI
+
+# CI for the redimos proxy.
+#
+# Two responsibilities (see design.md "两项目布局" / Testing Strategy "redimo fork 回归"):
+#   1. redimo-fork-regression: pin the redimo fork to a LOCKED commit (tracking the
+#      v1.7 branch) and run its Strings / Hashes / Lists / Sets / SortedSets data
+#      structure regression tests. The fork is still stabilizing hashes/lists, so we
+#      lock the commit and keep these regression tests green as a gate.
+#   2. redimos-build-test: build and test the redimos proxy module itself.
+#
+# 需求: 术语表 Redimo_Store
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  # redimo fork pinned reference (LOCKED commit tracking the v1.7 branch tip).
+  # Update this together with the go.mod replace/pinned commit in the redimos module
+  # whenever the fork is intentionally bumped.
+  REDIMO_REPO: aura-studio/redimo
+  REDIMO_REF: 3ad7ceccba61660f01140dfef0f168f72638c010
+
+jobs:
+  redimo-fork-regression:
+    name: redimo fork data-structure regression
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Check out redimo fork at locked commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REDIMO_REPO }}
+          ref: ${{ env.REDIMO_REF }}
+          path: redimo
+
+      - name: Verify locked commit
+        working-directory: redimo
+        run: |
+          echo "redimo fork checked out at: $(git rev-parse HEAD)"
+          if [ "$(git rev-parse HEAD)" != "${REDIMO_REF}" ]; then
+            echo "::error::redimo fork HEAD does not match locked REDIMO_REF (${REDIMO_REF})"
+            exit 1
+          fi
+
+      - name: Start DynamoDB Local
+        uses: rrainn/dynamodb-action@v4.0.0
+        with:
+          port: 8000
+          cors: '*'
+
+      - name: Download dependencies
+        working-directory: redimo
+        run: go mod download
+
+      - name: Build redimo fork
+        working-directory: redimo
+        run: go build -v .
+
+      # Run ONLY the Strings / Hashes / Lists / Sets / SortedSets regression tests.
+      # Anchored alternation keeps geo / streams / composite / values / key tests out
+      # of scope so this job is a focused gate on the five data structures.
+      - name: Run Strings / Hashes / Lists / Sets / SortedSets regression tests
+        working-directory: redimo
+        run: |
+          go test -v -count=1 -run '^(TestBasic|TestGETSET|TestCounters|TestAtomicOps|TestBasicHashes|TestAtomicHashOps|TestHashCounters|TestLBasics|TestRPOPLPUSH|TestListIndexBasedCRUD|TestListValueBasedCRUD|TestConcurrent.*|TestSingleThread|TestMultiThread|TestBasicSets|TestSetOperations|TestSetModifiers|TestZBasic|TestZPops|TestZRanges|TestZCounts|TestZAggregations)$' .
+
+  redimos-build-test:
+    name: redimos build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out redimos
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Start DynamoDB Local
+        uses: rrainn/dynamodb-action@v4.0.0
+        with:
+          port: 8000
+          cors: '*'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        run: go test -v -count=1 ./...
