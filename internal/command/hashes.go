@@ -576,7 +576,7 @@ func (r *Router) handleHIncrBy(ctx context.Context, c *server.Conn, args [][]byt
 // 6.1): add the float increment to the field's float value (a missing field starts
 // at 0) and reply the new value as a bulk string (shortest decimal, trailing zeros
 // trimmed). A non-float increment replies the not-a-valid-float error; a non-float
-// field value replies "-ERR hash value is not a float"; a NaN/Infinity result
+// field value replies "-ERR hash value is not a valid float"; a NaN/Infinity result
 // replies the NaN-or-Infinity error. A new field bumps cnt by 1. A live non-Hash
 // key replies WRONGTYPE.
 func (r *Router) handleHIncrByFloat(ctx context.Context, c *server.Conn, args [][]byte) {

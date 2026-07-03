@@ -178,10 +178,31 @@ func parseSetOptions(opts [][]byte, now int64) (setOptions, string) {
 	return o, ""
 }
 
+// overwriteAnyType prepares a destructive String write (plain SET / SETEX /
+// PSETEX): in Redis these commands replace a key of ANY type, so a key currently
+// holding a live non-String value must be removed first — its meta is dropped and
+// its members are enqueued for reclaim, exactly like DEL — so the subsequent
+// EnsureType(String) creates a fresh string instead of failing WRONGTYPE. A
+// String, absent, or already-expired key needs no action. (This mirrors Redis'
+// type-agnostic SET; it is not used by SETNX, which never overwrites, nor by
+// GETSET, which reads the old value as a string and so keeps WRONGTYPE.)
+func (r *Router) overwriteAnyType(ctx context.Context, pk string) error {
+	m, ok, err := r.Storage.Meta.Load(ctx, pk)
+	if err != nil {
+		return err
+	}
+	if !ok || meta.IsExpired(m, r.now()) || m.Type == meta.TypeString {
+		return nil
+	}
+	_, err = r.Storage.Meta.DeleteMeta(ctx, pk)
+	return err
+}
+
 // handleSet implements SET with the EX/PX/NX/XX options (requirements 5.2, 5.3,
 // 5.4). On success it replies "+OK"; an NX rejection (key exists) or XX rejection
 // (key absent) replies the null bulk string "$-1". EX/PX write meta.exp; a SET
-// without EX/PX clears any existing TTL to match Redis/Pika semantics.
+// without EX/PX clears any existing TTL to match Redis/Pika semantics. A plain SET
+// over a key of another type overwrites it (Redis SET is type-agnostic).
 func (r *Router) handleSet(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	key, val := args[1], args[2]
@@ -212,6 +233,10 @@ func (r *Router) handleSet(ctx context.Context, c *server.Conn, args [][]byte) {
 		}
 	}
 
+	if err := r.overwriteAnyType(ctx, pk); err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
 	if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -316,6 +341,10 @@ func (r *Router) setWithExpiry(ctx context.Context, c *server.Conn, key, val, ex
 
 	pk := encodePK(c.DB(), key)
 
+	if err := r.overwriteAnyType(ctx, pk); err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
 	if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
 		r.writeStoreError(c, err)
 		return

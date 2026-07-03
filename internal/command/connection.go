@@ -106,12 +106,12 @@ func (r *Router) registerConnection() {
 	r.registerStubs()
 }
 
-// handleHello always replies "-ERR unknown command 'HELLO'" so that go-redis v9
-// and redis-py 5+ fall back to RESP2 (requirement 2.1). The name is emitted in
-// its canonical uppercase form to guarantee the exact wire bytes regardless of
-// how the client cased the command or what arguments it carried.
-func handleHello(_ context.Context, c *server.Conn, _ [][]byte) {
-	writeError(c, resp.ErrUnknownCommand("HELLO"))
+// handleHello replies "-ERR unknown command '<name>'" so that go-redis v9 and
+// redis-py 5+ fall back to RESP2 (requirement 2.1). The name is echoed exactly as
+// the client sent it (case preserved), matching the generic unknown-command path
+// and real Redis, which reflects the client's casing.
+func handleHello(_ context.Context, c *server.Conn, args [][]byte) {
+	writeError(c, resp.ErrUnknownCommand(string(args[0])))
 }
 
 // handlePing implements PING: no argument replies "+PONG"; a single argument is
@@ -162,7 +162,9 @@ func (r *Router) handleSelect(_ context.Context, c *server.Conn, args [][]byte) 
 	w := resp.NewWriter(c.Redcon())
 	idx, err := ParseInt(args[1])
 	if err != nil {
-		w.Error(resp.ErrNotInteger)
+		// Redis 3.2 reports a non-numeric DB index as "invalid DB index", not the
+		// generic not-an-integer error.
+		w.Error(resp.ErrInvalidDBIndex)
 		return
 	}
 	if idx == 0 {

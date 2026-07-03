@@ -309,7 +309,7 @@ func TestHIncrByFloat(t *testing.T) {
 func TestHIncrByFloatNonFloatField(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
 	sendRead(t, conn, r, "HSET h f hello")
-	want := "-ERR hash value is not a float"
+	want := "-ERR hash value is not a valid float"
 	if got := sendRead(t, conn, r, "HINCRBYFLOAT h f 1.0"); got != want {
 		t.Errorf("HINCRBYFLOAT on non-float field = %q, want %q", got, want)
 	}

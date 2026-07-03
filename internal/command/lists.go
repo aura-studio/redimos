@@ -306,12 +306,9 @@ func (r *Router) handleLIndex(ctx context.Context, c *server.Conn, args [][]byte
 	w := resp.NewWriter(c.Redcon())
 	pk := encodePK(c.DB(), args[1])
 
-	index, err := ParseInt(args[2])
-	if err != nil {
-		w.Error(resp.ErrNotInteger)
-		return
-	}
-
+	// Redis checks key existence and type BEFORE parsing the index, so a missing
+	// key replies "$-1" and a wrong-type key replies WRONGTYPE even when the index
+	// argument is malformed.
 	_, live, wrongType, err := r.listState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
@@ -323,6 +320,12 @@ func (r *Router) handleLIndex(ctx context.Context, c *server.Conn, args [][]byte
 	}
 	if !live {
 		w.NullBulk()
+		return
+	}
+
+	index, err := ParseInt(args[2])
+	if err != nil {
+		w.Error(resp.ErrNotInteger)
 		return
 	}
 

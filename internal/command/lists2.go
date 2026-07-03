@@ -78,16 +78,9 @@ func (r *Router) handleLSet(ctx context.Context, c *server.Conn, args [][]byte) 
 	pk := encodePK(c.DB(), key)
 	value := args[3]
 
-	index, err := ParseInt(args[2])
-	if err != nil {
-		w.Error(resp.ErrNotInteger)
-		return
-	}
-	if err := guard.CheckWrite(key, [][]byte{value}, nil); err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
-
+	// Redis checks key existence and type BEFORE parsing the index, so a missing
+	// key replies "no such key" and a wrong-type key replies WRONGTYPE even when
+	// the index argument is malformed.
 	_, live, wrongType, err := r.listState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
@@ -99,6 +92,16 @@ func (r *Router) handleLSet(ctx context.Context, c *server.Conn, args [][]byte) 
 	}
 	if !live {
 		w.Error(resp.ErrNoSuchKey)
+		return
+	}
+
+	index, err := ParseInt(args[2])
+	if err != nil {
+		w.Error(resp.ErrNotInteger)
+		return
+	}
+	if err := guard.CheckWrite(key, [][]byte{value}, nil); err != nil {
+		r.writeStoreError(c, err)
 		return
 	}
 

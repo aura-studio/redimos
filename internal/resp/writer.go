@@ -157,8 +157,9 @@ const (
 	ErrHashNotInteger = "ERR hash value is not an integer"
 
 	// ErrHashNotFloat is returned when an HINCRBYFLOAT targets a field whose value
-	// is not a valid float. Requirement 6.1.
-	ErrHashNotFloat = "ERR hash value is not a float"
+	// is not a valid float. Requirement 6.1. Matches Redis 3.2 byte-for-byte
+	// ("is not a valid float", including the word "valid").
+	ErrHashNotFloat = "ERR hash value is not a valid float"
 
 	// ErrNoAuth is returned for business commands on an unauthenticated
 	// connection when requirepass is configured. Requirement 2.6.

@@ -95,11 +95,15 @@ func sendRead(t *testing.T, conn net.Conn, r *bufio.Reader, cmd string) string {
 func TestHelloRepliesUnknownCommand(t *testing.T) {
 	conn, r := startConnServer(t, Config{})
 
-	// Requirement 2.1: HELLO must reply the exact unknown-command error so
-	// go-redis v9 / redis-py 5+ fall back to RESP2. Bytes are canonical
-	// uppercase regardless of how the client cased/argumented the command.
-	want := "-ERR unknown command 'HELLO'"
-	for _, cmd := range []string{"HELLO", "hello 3", "HELLO 3 AUTH user pass"} {
+	// Requirement 2.1: HELLO must reply the unknown-command error so go-redis v9 /
+	// redis-py 5+ fall back to RESP2. The command name is echoed exactly as the
+	// client cased it (like the generic unknown-command path and real Redis).
+	cases := map[string]string{
+		"HELLO":                   "-ERR unknown command 'HELLO'",
+		"hello 3":                 "-ERR unknown command 'hello'",
+		"HELLO 3 AUTH user pass":  "-ERR unknown command 'HELLO'",
+	}
+	for cmd, want := range cases {
 		if got := sendRead(t, conn, r, cmd); got != want {
 			t.Errorf("%q = %q, want %q", cmd, got, want)
 		}
@@ -239,7 +243,8 @@ func TestSelectNegativeRejectedEvenWithMultiDB(t *testing.T) {
 
 func TestSelectNonIntegerIndex(t *testing.T) {
 	conn, r := startConnServer(t, Config{})
-	want := "-ERR value is not an integer or out of range"
+	// Redis 3.2 reports a non-numeric SELECT argument as "invalid DB index".
+	want := "-ERR invalid DB index"
 	if got := sendRead(t, conn, r, "SELECT abc"); got != want {
 		t.Errorf("SELECT abc = %q, want %q", got, want)
 	}

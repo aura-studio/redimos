@@ -560,18 +560,43 @@ func TestGetSetMissingReturnsNullBulk(t *testing.T) {
 
 // --- WRONGTYPE type-check on writes (requirement 3.6) -----------------------
 
-func TestSetWrongTypeReturnsWrongType(t *testing.T) {
-	store := newFakeStringStore()
-	// Seed a non-string key: meta present with type "hash".
-	store.metas["0:k"] = storage.Meta{Type: string(meta.TypeHash)}
-	store.live["0:k"] = true
+// TestSetOverwritesAnyType pins the Redis semantics that plain SET / SET XX /
+// SETEX / PSETEX are destructive, type-agnostic writes: they overwrite a key of
+// ANY type and reply "+OK". GETSET, which reads the previous value as a string,
+// still returns WRONGTYPE on a non-string key.
+func TestSetOverwritesAnyType(t *testing.T) {
+	newHashKey := func() *fakeStringStore {
+		s := newFakeStringStore()
+		s.metas["0:k"] = storage.Meta{Type: string(meta.TypeHash)}
+		s.live["0:k"] = true
+		return s
+	}
 
-	conn, r := startStringServer(t, store, fixedNow(1000))
-	want := "-WRONGTYPE Operation against a key holding the wrong kind of value"
-	if got := sendRead(t, conn, r, "SET k v XX"); got != want {
+	// Plain SET overwrites the hash and the key becomes a string.
+	conn, r := startStringServer(t, newHashKey(), fixedNow(1000))
+	if got, want := sendRead(t, conn, r, "SET k v"), "+OK"; got != want {
+		t.Errorf("SET k v (hash key) = %q, want %q", got, want)
+	}
+	if got, want := sendRead(t, conn, r, "GET k"), "$v"; got != want {
+		t.Errorf("GET k after SET overwrite = %q, want %q", got, want)
+	}
+
+	// SET XX overwrites (XX passes because the key exists, regardless of type).
+	conn, r = startStringServer(t, newHashKey(), fixedNow(1000))
+	if got, want := sendRead(t, conn, r, "SET k v XX"), "+OK"; got != want {
 		t.Errorf("SET k v XX (hash key) = %q, want %q", got, want)
 	}
-	if got := sendRead(t, conn, r, "GETSET k v"); got != want {
+
+	// SETEX overwrites too.
+	conn, r = startStringServer(t, newHashKey(), fixedNow(1000))
+	if got, want := sendRead(t, conn, r, "SETEX k 100 v"), "+OK"; got != want {
+		t.Errorf("SETEX k 100 v (hash key) = %q, want %q", got, want)
+	}
+
+	// GETSET on a non-string key is still WRONGTYPE.
+	conn, r = startStringServer(t, newHashKey(), fixedNow(1000))
+	if got, want := sendRead(t, conn, r, "GETSET k v"),
+		"-WRONGTYPE Operation against a key holding the wrong kind of value"; got != want {
 		t.Errorf("GETSET k v (hash key) = %q, want %q", got, want)
 	}
 }

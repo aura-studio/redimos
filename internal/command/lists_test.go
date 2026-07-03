@@ -252,10 +252,12 @@ func TestLIndexAbsentIsNullBulk(t *testing.T) {
 }
 
 func TestLIndexNonInteger(t *testing.T) {
+	// Redis checks key existence before parsing the index, so LINDEX on a MISSING
+	// key with a malformed index short-circuits to the null bulk string rather than
+	// surfacing the not-an-integer error.
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	want := "-ERR value is not an integer or out of range"
-	if got := sendRead(t, conn, r, "LINDEX l abc"); got != want {
-		t.Errorf("LINDEX l abc = %q, want %q", got, want)
+	if got, want := sendRead(t, conn, r, "LINDEX l abc"), "$-1"; got != want {
+		t.Errorf("LINDEX l abc (missing key) = %q, want %q", got, want)
 	}
 }
 
