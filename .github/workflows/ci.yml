@@ -19,11 +19,11 @@ on:
     branches: [ main, master ]
 
 env:
-  # redimo fork pinned reference (LOCKED commit = tag v2.0.0 on the v2.0 branch).
+  # redimo fork pinned reference (LOCKED commit = tag v2.0.1 on the v2.0 branch).
   # Update this together with the redimo version required in the redimos go.mod
   # whenever the fork is intentionally bumped.
   REDIMO_REPO: aura-studio/redimo
-  REDIMO_REF: d49029d1ab5ee67a613bdf7a52246bea69b3d327
+  REDIMO_REF: 49bb1233b9744131525dd4f6d57ec1d20e17df7b
 
 jobs:
   redimo-fork-regression:
