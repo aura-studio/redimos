@@ -150,6 +150,7 @@ func (r *Router) registerDataCommands() {
 	r.registerSets()
 	r.registerZSets()
 	r.registerLists()
+	r.registerBit()
 
 	// GEO is optional: only registered when a geospatial seam is wired, so a
 	// deployment without it leaves the GEO* commands on the unknown-command path.

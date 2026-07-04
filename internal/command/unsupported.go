@@ -69,9 +69,6 @@ var UnsupportedCommands = []string{
 	// Blocking list pops (requirement 4.4).
 	"BLPOP", "BRPOP", "BRPOPLPUSH",
 
-	// Bit operations (requirement 4.5).
-	"SETBIT", "GETBIT", "BITCOUNT", "BITOP", "BITPOS",
-
 	// HyperLogLog (requirement 4.6).
 	"PFADD", "PFCOUNT", "PFMERGE",
 

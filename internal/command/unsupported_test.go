@@ -47,17 +47,6 @@ func representativeArgs(cmd string) string {
 		return "k 0"
 	case "BRPOPLPUSH":
 		return "src dst 0"
-	// Bit ops.
-	case "SETBIT":
-		return "k 7 1"
-	case "GETBIT":
-		return "k 7"
-	case "BITCOUNT":
-		return "k"
-	case "BITOP":
-		return "AND dest k"
-	case "BITPOS":
-		return "k 1"
 	// HyperLogLog.
 	case "PFADD":
 		return "hll a"
@@ -160,7 +149,6 @@ func TestUnsupportedCommandsAreErrorRepliesNotDowngrade(t *testing.T) {
 		"EVAL":      "return 1 0",  // 4.2 Lua
 		"MULTI":     "",            // 4.3 transactions
 		"BLPOP":     "k 0",         // 4.4 blocking
-		"SETBIT":    "k 7 1",       // 4.5 bit ops
 		"PFADD":     "hll a",       // 4.6 HyperLogLog
 		"GEOADD":    "geo 13 38 m", // 4.6 GEO
 		"XADD":      "s * f v",     // 4.6 Streams
