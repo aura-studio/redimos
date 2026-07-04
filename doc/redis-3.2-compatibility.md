@@ -53,6 +53,8 @@
 | redimos **v1.17.0** | 升级 redimo v2.0.3，**SCAN 现在能用了**（实测真 DynamoDB：db0 与多 db 均正确按库返回 + MATCH 过滤）。KEYS 代理拒绝时提示的「用 SCAN」至此名副其实 |
 | redimos **v1.18.0** | 最后 7 条「架构不可能」命令 **DUMP/RESTORE/RESTORE-ASKING/MIGRATE/SYNC/PSYNC/SLAVEOF** → 代理拒绝（各带专属消息）。**未知命令路径清零**：174 条真实 Redis 3.2 命令全部显式处理。代理拒绝 42 / 不支持 0 |
 | redimos **v1.19.0** | **移除内置 Pika 迁移子系统**（`internal/migrate`：dual-write / shadow-read / fallback / importer + `--dual-write`/`--pika-addr`/`--shadow-read`/`--fallback`/`--migrate-prefixes` 等 flag）。该子系统此前仅在 main.go 构造并打日志、**从未接入读写请求路径**（router 拿的是裸 store），属死脚手架；迁移改用外部 pika-migrate 工具，与本项目无关，故清除 |
+| redimo **v2.1.0** | **结构一致性清理（未上线，破坏性）**：删 streams.go/geo.go(S2)/composite.go（~1750 行）+ 裁 `golang/geo`/`geohash`/`oklog/ulid` 依赖；去掉 set 成员的随机 skN（纯死写、污染 LSI、使 SADD 属性层非幂等）；list 元素改二进制容忍（`valueBytes`,去掉会 panic 的 `e.(StringValue)` 断言）+ index skN 由 float 格式改 int 格式（与 ParseInt 读路径一致）；修 `CreateProvisionedTable` 成功误报 nil-`%w` bug。redimo 全测试绿 |
+| redimos **v1.20.0** | 升 redimo v2.1.0（list 元素改传 `BytesValue`,与 string/hash 统一）；**新增内置集成测试 `test/integration/`**：差分一致性(74 命令 vs 3.2 逐字节)/命令原子性(SETNX 恰好一个赢家 + INCR 计数==已确认)/全字符集(256 字节全类型往返),见 §10.1 |
 
 ---
 
@@ -164,6 +166,17 @@ HyperLogLog 是存在 Redis String 里的 "HYLL" blob;和 BIT 一样 **纯命令
 ## 10. 测试环境（Docker）
 
 全部测试在 Docker 内跑（不用宿主）：真 Redis 3.2 作 oracle 与 redimos 代理同网,对拍字节级差分 + 并发原子性 + 逐字节字符对齐。详见仓库 `test/` 与差分框架 `test/difftest/`。
+
+### 10.1 内置集成测试 `test/integration/`（真 redimo→DynamoDB 路径）
+
+三条核心性质写成常规 Go 测试,走**真实 redimo→DynamoDB 路径**(非内存 fake),用环境变量 gate —— 裸 `go test ./...` 自动 skip,Docker harness 里跑:
+
+- 环境:`REDIMOS_PROXY_ADDR`(必填,如 `rdms-proxy:6380`)、`REDIMOS_REDIS_ORACLE`(差分测试用,如 `redimos-redis32:6379`)。
+- **`charset_test.go`（全字符集）**:string 值/key 名、hash 字段+值、set/zset 成员、list 元素,全部对 **256 个单字节 + 0..255 全序列 + 内嵌 CRLF/NUL/RESP 注入样本** 做逐字节往返;实测全绿。
+- **`atomicity_test.go`（命令原子性）**:SETNX 20 轮×40 并发**恰好一个 `:1`**;INCR 16 路并发下**计数器 == 已确认 INCR 数**(CAS 从不丢/重已确认的更新;高争用下少量 INCR 会耗尽有界重试返回可重试错误,与 Redis 单线程不同,已在日志中标注)。
+- **`differential_test.go`（差分一致性）**:74 条 redimo 后端命令(string/key/hash/list/set/zset/BIT/HLL,只取顺序确定的)对真 Redis 3.2 **逐字节一致**。
+
+实测(vs redis:3.2.12)四项全绿。
 
 ---
 

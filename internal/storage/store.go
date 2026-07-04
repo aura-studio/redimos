@@ -551,13 +551,10 @@ type Store interface {
 	// element writes the same way, and LLEN reads meta.cnt for O(1) (requirements
 	// 7.2, 7.7).
 	//
-	// Element-type note (redimo fork lPush): the fork's list push does an
-	// unchecked `e.(StringValue)` type assertion on each element, so the elements
-	// MUST be handed to it as redimo.StringValue — passing a BytesValue (as the
-	// String/Hash/Set families do for their opaque-binary values) would panic. The
-	// redimo-backed implementation therefore wraps each element as a StringValue
-	// and reads it back via ReturnValue.String(); Go strings are byte-safe so a
-	// list element still round-trips its bytes. LPUSHX/RPUSHX are not part of this
+	// Element-type note: list elements are passed as binary-safe redimo.BytesValue
+	// (same as the String/Hash/Set families), matching redimo v2.1's binary-tolerant
+	// list handling (valueBytes), and read back via ReturnValue.String() — Go strings
+	// are byte-safe so a list element round-trips its exact bytes. LPUSHX/RPUSHX are not part of this
 	// seam: the "only if the key exists" gate is enforced by the command layer via
 	// the meta read before it calls LPush/RPush.
 	//
@@ -625,7 +622,7 @@ type Store interface {
 	// (newLen - oldCnt) via the meta layer so LLEN stays exact. Passing an empty
 	// slice clears every element item (the caller then drives cnt to 0, deleting
 	// the key, matching Redis where an empty list does not exist). Elements are
-	// stored as redimo.StringValue, consistent with LPush/RPush.
+	// passed as redimo.BytesValue, consistent with LPush/RPush.
 	//
 	// The rewrite is NOT a single atomic DynamoDB operation — it clears the
 	// element items and re-writes them — so it is not atomic across concurrent
@@ -1834,12 +1831,11 @@ func SortZMembers(members []ZMember) {
 
 // --- List data operations (task 16.1) --------------------------------------
 //
-// Elements are handed to the fork's LPUSH/RPUSH as redimo.StringValue (NOT
-// BytesValue): the fork's lPush performs an unchecked `e.(StringValue)` type
-// assertion on every element, so a BytesValue would panic. Wrapping each element
-// as a StringValue avoids that panic; the bytes still round-trip because a Go
-// string is byte-safe and the values are read back with ReturnValue.String()
-// (the fork stores the element under the value attribute as a DynamoDB S type).
+// Elements are handed to LPUSH/RPUSH as binary-safe redimo.BytesValue (as the
+// String/Hash/Set families do); redimo v2.1 accepts either BytesValue or
+// StringValue for list elements (valueBytes) and stores the value as a DynamoDB
+// Binary attribute. They are read back with ReturnValue.String() — a Go string is
+// byte-safe, so an element round-trips its exact bytes.
 //
 // The fork's list reads normalize indices against its own LLEN, which counts the
 // whole partition and therefore also counts the reserved meta item (sk =
@@ -1856,16 +1852,16 @@ func SortZMembers(members []ZMember) {
 
 func (s *redimoStore) LPush(_ context.Context, pk string, elements [][]byte) (int, error) {
 	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Elements are wrapped as StringValue to match the
-	// fork's lPush type assertion (see the List doc above); every element is
-	// pushed, so the net cnt delta is len(elements).
+	// context.TODO() internally. Elements are passed as binary-safe BytesValue (as
+	// the String/Hash/Set families do), matching redimo v2.1's binary-tolerant list
+	// element handling; every element is pushed, so the net cnt delta is len(elements).
 	if len(elements) == 0 {
 		return 0, nil
 	}
 
 	vals := make([]interface{}, len(elements))
 	for i, e := range elements {
-		vals[i] = redimo.StringValue{S: string(e)}
+		vals[i] = redimo.BytesValue{B: e}
 	}
 
 	if _, err := s.client.LPUSH(pk, vals...); err != nil {
@@ -1877,14 +1873,14 @@ func (s *redimoStore) LPush(_ context.Context, pk string, elements [][]byte) (in
 
 func (s *redimoStore) RPush(_ context.Context, pk string, elements [][]byte) (int, error) {
 	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Elements are wrapped as StringValue as for LPush.
+	// context.TODO() internally. Elements are passed as BytesValue as for LPush.
 	if len(elements) == 0 {
 		return 0, nil
 	}
 
 	vals := make([]interface{}, len(elements))
 	for i, e := range elements {
-		vals[i] = redimo.StringValue{S: string(e)}
+		vals[i] = redimo.BytesValue{B: e}
 	}
 
 	if _, err := s.client.RPUSH(pk, vals...); err != nil {
@@ -1978,7 +1974,7 @@ func (s *redimoStore) LReplaceAll(ctx context.Context, pk string, elements [][]b
 	// DeleteMembers removes all data-member items (the list's elements) but leaves
 	// the reserved meta item intact, so the length counter is maintained by the
 	// caller via the meta layer. RPush appends in order, so the resulting
-	// head-to-tail order equals elements (wrapped as redimo.StringValue by RPush).
+	// head-to-tail order equals elements (passed as redimo.BytesValue by RPush).
 	// This is not atomic across concurrent connections: unlike the single-item
 	// String read-modify-write commands (which task 20.1 made safe with a
 	// compare-and-set + retry), a multi-item list rebuild would need a DynamoDB
