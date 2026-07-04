@@ -17,7 +17,7 @@ reject = set('keys rename renamenx flushall flushdb'.split())
 pubsub = set('subscribe unsubscribe psubscribe punsubscribe publish pubsub'.split())
 script = set('eval evalsha script'.split())
 txn = set('multi exec discard watch unwatch'.split())
-admin = set('bgrewriteaof bgsave save lastsave slaveof wait pfselftest debug monitor cluster latency role sync psync'.split())
+admin = set('bgrewriteaof bgsave save lastsave slaveof wait pfselftest role sync psync'.split())
 # Individual real-Redis-3.2 commands promoted from unsupported to proxy-reject as the
 # maintainer converts them one by one (each with its own dedicated message).
 reject_extra = {
@@ -26,6 +26,14 @@ reject_extra = {
     'readonly':  '代理拒绝：Redis Cluster replica 只读服务开关，非 cluster 代理无 replica/slot 可切换（v1.12.0 起专属拒绝）',
     'readwrite': '代理拒绝：清除 Cluster replica 只读标志（READONLY 的反向），无 cluster/replica 状态可复位（v1.13.0 起专属拒绝）',
     'replconf':  '代理拒绝：master↔replica 复制子协议（端口/capa 协商 + ACK offset 心跳），无复制链路/offset（v1.13.0 起专属拒绝）',
+    'randomkey': '代理拒绝：分区表上取随机键需无界全表扫（同 KEYS）；用 SCAN（v1.14.0 起专属拒绝）',
+    'move':      '代理拒绝：跨 DB 搬键=按新 pk 前缀重写整集合，非原子（同 RENAME）（v1.14.0 起专属拒绝）',
+    'sort':      '代理拒绝：BY/GET 每元素每模式一次外部读（无界扇出）+ STORE 非原子整集合替换（v1.14.0 起专属拒绝）',
+    'object':    '代理拒绝：ENCODING/REFCOUNT/IDLETIME 暴露 Redis 内部表示，DynamoDB item 没有（v1.14.0 起专属拒绝）',
+    'monitor':   '代理拒绝：需跨连接全局命令流+长驻流,无状态代理无法提供（同发布订阅）（v1.14.0 起专属拒绝）',
+    'cluster':   '代理拒绝：单一逻辑 keyspace 无 slot/成员,整族语义不适用（v1.14.0 起专属拒绝）',
+    'latency':   '代理拒绝：进程内有状态延迟监控,无状态代理不积累、多实例不自洽（v1.14.0 起专属拒绝）',
+    'debug':     '代理拒绝：多子命令(OBJECT/RELOAD/SET-ACTIVE-EXPIRE/SEGFAULT),无统一回复且部分危险（v1.14.0 起专属拒绝）',
 }
 # BIT family implemented (v1.6.0), byte-compatible for single-key ops (BITOP is
 # multi-key non-atomic).
@@ -41,7 +49,7 @@ geonew = set('geoadd geodist geopos geohash georadius georadiusbymember'.split()
 geo = set('georadius_ro georadiusbymember_ro'.split())
 block = set('blpop brpop brpoplpush'.split())
 flush = set('flushall flushdb'.split())
-keymgmt = set('move migrate dump restore restore-asking randomkey object sort'.split())
+keymgmt = set('migrate dump restore restore-asking'.split())
 # Newly implemented — now served via redimo. Kept as named sets so the table can
 # badge them as recently added.
 newly = set('msetnx substr touch zlexcount zremrangebylex'.split())  # v1.4.0

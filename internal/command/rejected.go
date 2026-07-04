@@ -67,6 +67,47 @@ const (
 	// heartbeats). It is meaningless without an active replication link and a
 	// maintained replication offset, neither of which a stateless proxy has.
 	errReplconfUnsupported = "ERR REPLCONF is not supported on this proxy (replication sub-protocol; no master/replica link exists)"
+
+	// errRandomKeyUnsupported rejects RANDOMKEY. Picking a random key from the whole
+	// keyspace has no bounded path on a partitioned DynamoDB table — it forces the
+	// same unbounded full-table scan already declined for KEYS.
+	errRandomKeyUnsupported = "ERR RANDOMKEY is not supported on this proxy (it requires an unbounded full-table scan; use SCAN)"
+
+	// errMoveUnsupported rejects MOVE. DBs are just the pk prefix in one table, so
+	// moving a key means rewriting every member item under a new prefix plus moving
+	// the meta — a costly, non-atomic whole-collection migrate, like RENAME.
+	errMoveUnsupported = "ERR MOVE is not supported on this proxy (a cross-DB move is a non-atomic whole-collection rewrite)"
+
+	// errSortUnsupported rejects SORT. BY/GET resolve one external lookup per element
+	// per pattern (unbounded fan-out) and STORE is a non-atomic whole-collection
+	// replace, so it is declined rather than served at unbounded cost.
+	errSortUnsupported = "ERR SORT is not supported on this proxy (BY/GET fan-out is unbounded and STORE is not atomic)"
+
+	// errObjectUnsupported rejects OBJECT. REFCOUNT/ENCODING/IDLETIME expose
+	// Redis-internal representation metadata (encoding names, refcounts, the LRU
+	// idle clock) that DynamoDB items do not have; any answer would be fabricated.
+	errObjectUnsupported = "ERR OBJECT is not supported on this proxy (DynamoDB items have no Redis-internal encoding/refcount/idletime)"
+
+	// errMonitorUnsupported rejects MONITOR. Streaming every command the server
+	// processes needs a global, cross-connection command bus and a long-lived stream,
+	// which a stateless per-connection proxy has no way to provide (like Pub/Sub).
+	errMonitorUnsupported = "ERR MONITOR is not supported on this proxy (it requires a global, cross-connection command stream)"
+
+	// errClusterUnsupported rejects the CLUSTER family. redimos is a single logical
+	// keyspace over one DynamoDB table, with no hash slots or cluster membership, so
+	// the whole family is semantically inapplicable.
+	errClusterUnsupported = "ERR CLUSTER is not supported on this proxy (a single logical keyspace over one DynamoDB table has no cluster/slots)"
+
+	// errLatencyUnsupported rejects the LATENCY family. It reports a stateful,
+	// in-process latency-spike monitor that a stateless proxy never accumulates and
+	// could not keep coherent across instances behind a load balancer.
+	errLatencyUnsupported = "ERR LATENCY is not supported on this proxy (no in-process latency-spike monitor is kept)"
+
+	// errDebugUnsupported rejects the DEBUG family. Its subcommands poke
+	// server-internal state (OBJECT encoding/refcount, RELOAD of a nonexistent RDB,
+	// SET-ACTIVE-EXPIRE, SEGFAULT) — no single reply is correct and several are
+	// meaningless or actively dangerous on a stateless proxy.
+	errDebugUnsupported = "ERR DEBUG is not supported on this proxy (server-internal debugging knobs are not available)"
 )
 
 // registerRejected registers the deliberately-declined-but-real Redis 3.2 families
@@ -106,6 +147,14 @@ func (r *Router) registerRejected() {
 	r.registerReject("READONLY", 1, errReadOnlyUnsupported)
 	r.registerReject("READWRITE", 1, errReadWriteUnsupported)
 	r.registerReject("REPLCONF", -1, errReplconfUnsupported)
+	r.registerReject("RANDOMKEY", 1, errRandomKeyUnsupported)
+	r.registerReject("MOVE", 3, errMoveUnsupported)
+	r.registerReject("SORT", -2, errSortUnsupported)
+	r.registerReject("OBJECT", 3, errObjectUnsupported)
+	r.registerReject("MONITOR", 1, errMonitorUnsupported)
+	r.registerReject("CLUSTER", -2, errClusterUnsupported)
+	r.registerReject("LATENCY", -2, errLatencyUnsupported)
+	r.registerReject("DEBUG", -1, errDebugUnsupported)
 }
 
 // registerReject registers a single command as a first-class proxy rejection: the
