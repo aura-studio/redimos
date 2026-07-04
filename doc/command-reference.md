@@ -8,16 +8,16 @@
 
 | 处置 | 数量 | 说明 |
 |---|---:|---|
-| **经 redimo** | 108 | 数据/键状态读写，真正打 DynamoDB |
+| **经 redimo** | 111 | 数据/键状态读写，真正打 DynamoDB |
 | 桩 | 7 | 固定/内存态回答（如 DBSIZE→`:0`），不碰键空间 |
 | 连接 | 4 | 仅连接状态（AUTH/SELECT/PING/ECHO） |
 | 代理拒绝 | 5 | 定制拒绝（KEYS/RENAME） |
-| 不支持 | 50 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
-| **合计** | 174 | 其中 108 需要 redimo |
+| 不支持 | 47 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
+| **合计** | 174 | 其中 111 需要 redimo |
 
 近期在 v1.4.0 新增并经 redimo 的命令（此前为「不支持」）：**MSETNX · SUBSTR · TOUCH · ZLEXCOUNT · ZREMRANGEBYLEX**。
 
-## 需要 redimo（数据面，经存储层） — 108 条
+## 需要 redimo（数据面，经存储层） — 111 条
 
 数据与键的元信息（类型/TTL/计数）都存在 DynamoDB，这些命令必须读/写它。
 
@@ -130,6 +130,9 @@
 | `georadius` | `w` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
 | `georadiusbymember` | `w` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
 | `getbit` | `rF` | 1 | 是 | bit | 是 | **✓** 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子） |
+| `pfadd` | `wmF` | 1 | 是 | hll | 是 | **✓** 新增 v1.7.0 → 经 redimo（HLL；PFCOUNT 低基数字节一致、高基数在误差内） |
+| `pfcount` | `r` | 1 | 是 | hll | 是 | **✓** 新增 v1.7.0 → 经 redimo（HLL；PFCOUNT 低基数字节一致、高基数在误差内） |
+| `pfmerge` | `wm` | 1 | 是 | hll | 是 | **✓** 新增 v1.7.0 → 经 redimo（HLL；PFCOUNT 低基数字节一致、高基数在误差内） |
 | `setbit` | `wm` | 1 | 是 | bit | 是 | **✓** 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子） |
 
 ## 不需要 redimo — 桩 — 7 条
@@ -169,7 +172,7 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `rename` | `w` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
 | `renamenx` | `wF` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
 
-## 不经 redimo — 未支持（未知命令） — 50 条
+## 不经 redimo — 未支持（未知命令） — 47 条
 
 是 Redis 数据命令，但 redimos 在命令层就短路，不发起存储调用。
 
@@ -197,10 +200,7 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `move` | `wF` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了/代价过高 |
 | `multi` | `sF` | 0 | 否 | — | 否 | 事务：架构受限（需原子多命令） |
 | `object` | `r` | 2 | 是 | — | 否 | 键管理：DynamoDB 表达不了/代价过高 |
-| `pfadd` | `wmF` | 1 | 是 | — | 否 | HyperLogLog：可经命令层实现，尚未做（同 BIT） |
-| `pfcount` | `r` | 1 | 是 | — | 否 | HyperLogLog：可经命令层实现，尚未做（同 BIT） |
 | `pfdebug` | `w` | 0 | 是 | — | 否 | HyperLogLog：可经命令层实现，尚未做（同 BIT） |
-| `pfmerge` | `wm` | 1 | 是 | — | 否 | HyperLogLog：可经命令层实现，尚未做（同 BIT） |
 | `pfselftest` | `a` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `psubscribe` | `pslt` | 0 | 否 | — | 否 | 发布订阅：架构受限（需连接级订阅+跨连接 fan-out，无状态代理不适合） |
 | `psync` | `ars` | 0 | 是 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |

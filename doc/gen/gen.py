@@ -22,7 +22,9 @@ admin = set('bgrewriteaof bgsave save lastsave shutdown slaveof replconf asking 
 # multi-key non-atomic).
 bit_new = set('setbit getbit bitcount bitop bitpos bitfield'.split())
 bit = set()
-hll = set('pfadd pfcount pfmerge pfdebug'.split())
+# PFADD/PFCOUNT/PFMERGE implemented (v1.7.0); pfdebug stays unsupported (debug).
+hll_new = set('pfadd pfcount pfmerge'.split())
+hll = set('pfdebug'.split())
 # The 6 base GEO commands are implemented (v1.5.0); the read-only _ro variants
 # (Redis 3.2.10+) are not registered.
 geonew = set('geoadd geodist geopos geohash georadius georadiusbymember'.split())
@@ -35,7 +37,8 @@ keymgmt = set('move migrate dump restore restore-asking randomkey object sort'.s
 newly = set('msetnx substr touch zlexcount zremrangebylex'.split())  # v1.4.0
 newly_geo = geonew  # v1.5.0
 newly_bit = bit_new  # v1.6.0
-via = via | newly | newly_geo | newly_bit
+newly_hll = hll_new  # v1.7.0
+via = via | newly | newly_geo | newly_bit | newly_hll
 notimpl = set()
 
 listcmds = set('lpush rpush lpushx rpushx lpop rpop llen lrange lindex lset linsert lrem ltrim rpoplpush'.split())
@@ -47,6 +50,8 @@ def fam(n):
             return 'geo'
         if n in ('setbit','getbit','bitcount','bitpos','bitop','bitfield'):
             return 'bit'
+        if n in ('pfadd','pfcount','pfmerge'):
+            return 'hll'
         if n[0] == 'h':
             return 'hash'
         if n in listcmds:
@@ -67,7 +72,9 @@ for n, ar, s, fk in rows:
     keyspace = ('w' in s) or ('r' in s)
     if n in via:
         disp, need = 'via-redimo', '是'
-        if n in newly_bit:
+        if n in newly_hll:
+            reason = '✓ 新增 v1.7.0 → 经 redimo（HLL；PFCOUNT 低基数字节一致、高基数在误差内）'
+        elif n in newly_bit:
             reason = '✓ 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子）'
         elif n in newly_geo:
             reason = '✓ 新增 v1.5.0 → 经 redimo（GEO，功能版）'
