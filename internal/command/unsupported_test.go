@@ -7,46 +7,22 @@ import (
 	"github.com/aura-studio/redimos/v2/internal/resp"
 )
 
-// unsupported_test.go is the guard for task 18.1 / requirement 4.1–4.8: the
-// command families redimos deliberately does not support (see unsupported.go)
-// must be explicitly REJECTED with an error and never silently accepted.
+// unsupported_test.go guards how redimos disposes of the commands it does not serve
+// (see unsupported.go): the Streams family (absent from Redis 3.2) must reach the
+// generic unknown-command reply, while the deliberately-declined real-3.2 families
+// (Pub/Sub, Lua, transactions, blocking pops) must return their first-class proxy
+// rejections and never silently succeed.
 //
-// It exercises the real command router over an in-process server + TCP
-// connection (the same seam the String/Key tests use) with a fully wired,
-// storage-backed router, so any command that were accidentally registered would
-// reach its handler and produce a non-error reply — which these tests would
-// catch.
+// The tests exercise the real command router over an in-process server + TCP
+// connection with a fully wired, storage-backed router, so a command that were
+// accidentally accepted would reach its handler and produce a non-error reply —
+// which these tests would catch.
 
-// representativeArgs returns a plausible argument line for cmd so the command is
-// sent in a realistic shape (arguments and all). The reply must be identical
-// regardless of the arguments — dispatch fails the table lookup before it ever
-// looks at arity — but sending real arguments proves the proxy does not, for
-// example, quietly accept a well-formed SETBIT/PUBLISH/EVAL. An empty string
-// means "send the bare command name".
+// representativeArgs returns a plausible, correctly-shaped argument line for cmd so
+// the command reaches its handler (past the arity check) rather than tripping a
+// "wrong number of arguments" error. An empty string means "send the bare name".
 func representativeArgs(cmd string) string {
 	switch cmd {
-	// Pub/Sub.
-	case "SUBSCRIBE", "PSUBSCRIBE", "UNSUBSCRIBE", "PUNSUBSCRIBE":
-		return "chan"
-	case "PUBLISH":
-		return "chan msg"
-	case "PUBSUB":
-		return "CHANNELS"
-	// Lua.
-	case "EVAL":
-		return "return 1 0"
-	case "EVALSHA":
-		return "abc 0"
-	case "SCRIPT":
-		return "LOAD return"
-	// Transactions.
-	case "WATCH":
-		return "k"
-	// Blocking pops.
-	case "BLPOP", "BRPOP":
-		return "k 0"
-	case "BRPOPLPUSH":
-		return "src dst 0"
 	// Streams.
 	case "XADD":
 		return "s * f v"
@@ -60,32 +36,25 @@ func representativeArgs(cmd string) string {
 		return "s MAXLEN 10"
 	case "XINFO":
 		return "STREAM s"
-	// FLUSHALL / FLUSHDB and anything else take no args.
 	default:
 		return ""
 	}
 }
 
 // TestUnsupportedCommandsRejectedWithUnknownCommand asserts every command in
-// UnsupportedCommands is rejected with the exact byte-for-byte unknown-command
-// reply — "-ERR unknown command '<name>'" with the name echoed verbatim — and is
-// therefore never silently accepted (requirement 4.1–4.8). The command is sent
-// both bare and with representative arguments to show the rejection does not
-// depend on argument shape.
+// UnsupportedCommands (the Streams family, absent from Redis 3.2) is rejected with
+// the exact byte-for-byte unknown-command reply — "-ERR unknown command '<name>'"
+// with the name echoed verbatim — matching what a real Redis 3.2 server replies.
 func TestUnsupportedCommandsRejectedWithUnknownCommand(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
 
 	for _, name := range UnsupportedCommands {
-		// The name is echoed exactly as sent (requirement 3.3 / 4.8).
 		want := "-" + resp.ErrUnknownCommand(name)
 
-		// Bare command name.
 		if got := sendRead(t, conn, r, name); got != want {
 			t.Errorf("%q = %q, want %q", name, got, want)
 		}
 
-		// With representative arguments: the reply must be identical and must
-		// still be an error (never a silent success/downgrade).
 		if args := representativeArgs(name); args != "" {
 			line := name + " " + args
 			got := sendRead(t, conn, r, line)
@@ -99,12 +68,9 @@ func TestUnsupportedCommandsRejectedWithUnknownCommand(t *testing.T) {
 	}
 }
 
-// TestUnsupportedCommandsNotRegistered locks in the design decision (see
-// unsupported.go): none of the unsupported command families may be registered on
-// a fully wired, storage-backed router. If a future change accidentally registers
-// one (e.g. implementing SETBIT), this fails loudly rather than letting an
-// unsupported command slip through the table and bypass the unknown-command
-// rejection.
+// TestUnsupportedCommandsNotRegistered locks in that the unknown-command families
+// (Streams) stay unregistered on a fully wired router, so they keep reaching the
+// oracle-correct unknown-command rejection.
 func TestUnsupportedCommandsNotRegistered(t *testing.T) {
 	r := NewRouterWithStorage(Config{}, Storage{Store: newFakeStringStore(), Now: fixedNow(1000)})
 
@@ -115,36 +81,67 @@ func TestUnsupportedCommandsNotRegistered(t *testing.T) {
 	}
 }
 
-// TestUnsupportedCommandsAreErrorRepliesNotDowngrade is a focused restatement of
-// the core requirement: for a representative command from each declined family,
-// the reply is an error and is NOT any success shape (+OK, an integer, a bulk
-// value, or an array). This guards specifically against "silent downgrade"
-// (requirement 4.1–4.7) — e.g. FLUSHALL must not reply "+OK", PUBLISH must not
-// reply ":0", GETBIT must not reply ":0".
-func TestUnsupportedCommandsAreErrorRepliesNotDowngrade(t *testing.T) {
+// rejectCase is one deliberately-declined real-Redis-3.2 command: a correctly-shaped
+// invocation and the dedicated proxy-rejection message it must return.
+type rejectCase struct {
+	line string
+	want string
+}
+
+// TestRejectedFamiliesReturnDedicatedError asserts the Pub/Sub, Lua, transaction and
+// blocking-pop families are declined with their FIRST-CLASS proxy rejection (not the
+// generic unknown-command reply and never a silent success). These commands exist in
+// Redis 3.2, so a clear "not supported on this proxy" message is more honest than
+// "unknown command". Args are correctly shaped so dispatch reaches the reject handler.
+func TestRejectedFamiliesReturnDedicatedError(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
 
-	// One representative command per family (requirement clause in parens).
-	perFamily := map[string]string{
-		"SUBSCRIBE": "chan",        // 4.1 Pub/Sub
-		"PUBLISH":   "chan msg",    // 4.1 Pub/Sub
-		"EVAL":      "return 1 0",  // 4.2 Lua
-		"MULTI":     "",           // 4.3 transactions
-		"BLPOP":     "k 0",        // 4.4 blocking
-		"XADD":      "s * f v",    // 4.6 Streams
+	cases := []rejectCase{
+		// Pub/Sub.
+		{"SUBSCRIBE ch", errPubSubUnsupported},
+		{"UNSUBSCRIBE", errPubSubUnsupported},
+		{"PSUBSCRIBE ch", errPubSubUnsupported},
+		{"PUNSUBSCRIBE", errPubSubUnsupported},
+		{"PUBLISH ch msg", errPubSubUnsupported},
+		{"PUBSUB CHANNELS", errPubSubUnsupported},
+		// Lua.
+		{"EVAL script 0", errScriptUnsupported},
+		{"EVALSHA abc 0", errScriptUnsupported},
+		{"SCRIPT LOAD x", errScriptUnsupported},
+		// Transactions.
+		{"MULTI", errTxnUnsupported},
+		{"EXEC", errTxnUnsupported},
+		{"DISCARD", errTxnUnsupported},
+		{"WATCH k", errTxnUnsupported},
+		{"UNWATCH", errTxnUnsupported},
+		// Blocking pops.
+		{"BLPOP k 0", errBlockingUnsupported},
+		{"BRPOP k 0", errBlockingUnsupported},
+		{"BRPOPLPUSH src dst 0", errBlockingUnsupported},
 	}
 
-	for name, args := range perFamily {
-		line := name
-		if args != "" {
-			line = name + " " + args
+	for _, tc := range cases {
+		got := sendRead(t, conn, r, tc.line)
+		if want := "-" + tc.want; got != want {
+			t.Errorf("%q = %q, want %q", tc.line, got, want)
 		}
-		got := sendRead(t, conn, r, line)
-		if !strings.HasPrefix(got, "-") {
-			t.Errorf("%q = %q, want an error reply (must not silently downgrade)", line, got)
-		}
-		if want := "-" + resp.ErrUnknownCommand(name); got != want {
-			t.Errorf("%q = %q, want %q", line, got, want)
+	}
+}
+
+// TestRejectedFamiliesRegistered confirms the reject families ARE registered (so they
+// take the dedicated-rejection path, not the unknown-command path) with their real
+// Redis 3.2 arities, so a mis-shaped call still returns the standard arity error.
+func TestRejectedFamiliesRegistered(t *testing.T) {
+	r := NewRouterWithStorage(Config{}, Storage{Store: newFakeStringStore(), Now: fixedNow(1000)})
+
+	for _, name := range []string{
+		"SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE", "PUBLISH", "PUBSUB",
+		"EVAL", "EVALSHA", "SCRIPT",
+		"MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH",
+		"BLPOP", "BRPOP", "BRPOPLPUSH",
+	} {
+		if _, ok := r.Table.Lookup(name); !ok {
+			t.Errorf("reject family command %q is not registered; it would fall through to unknown-command instead of the dedicated rejection", name)
 		}
 	}
 }

@@ -39,7 +39,8 @@ newly = set('msetnx substr touch zlexcount zremrangebylex'.split())  # v1.4.0
 newly_geo = geonew  # v1.5.0
 newly_bit = bit_new  # v1.6.0
 newly_hll = hll_new  # v1.7.0
-via = via | newly | newly_geo | newly_bit | newly_hll
+newly_geo_ro = geo  # v1.10.0: GEORADIUS_RO / GEORADIUSBYMEMBER_RO (aliases of the base GEO commands)
+via = via | newly | newly_geo | newly_bit | newly_hll | newly_geo_ro
 notimpl = set()
 
 listcmds = set('lpush rpush lpushx rpushx lpop rpop llen lrange lindex lset linsert lrem ltrim rpoplpush'.split())
@@ -47,7 +48,7 @@ keyexp = set('del exists expire expireat pexpire pexpireat ttl pttl persist type
 
 def fam(n):
     if n in via or n in notimpl:
-        if n in ('geoadd','geodist','geopos','geohash','georadius','georadiusbymember'):
+        if n in geonew or n in geo:
             return 'geo'
         if n in ('setbit','getbit','bitcount','bitpos','bitop','bitfield'):
             return 'bit'
@@ -81,6 +82,8 @@ for n, ar, s, fk in rows:
             reason = '✓ 新增 v1.5.0；v1.8.0 改字节兼容版（zset + 52-bit geohash，非 S2）→ 经 redimo 存储'
         elif n in newly:
             reason = '✓ 新增 v1.4.0 → 经 redimo'
+        elif n in newly_geo_ro:
+            reason = '✓ 新增 v1.10.0 → GEORADIUS_RO/GEORADIUSBYMEMBER_RO 只读变体，别名到已实现的 GEO 命令（禁 STORE/STOREDIST）'
         else:
             reason = '数据/键状态读写 → 经 redimo 映射到 DynamoDB'
     elif n in conn:
@@ -97,19 +100,17 @@ for n, ar, s, fk in rows:
         else:
             reason = '代理拒绝：RENAME 需整集合搬迁，代价过高'
     elif n in pubsub:
-        disp, need, reason = 'unsupported', '否', '发布订阅：架构受限（需连接级订阅+跨连接 fan-out，无状态代理不适合）'
+        disp, need, reason = 'proxy-reject', '否', '代理拒绝：发布订阅需连接级订阅+跨连接 fan-out，无状态代理不适合（v1.10.0 起专属拒绝）'
     elif n in script:
-        disp, need, reason = 'unsupported', '否', 'Lua 脚本：架构受限（需内嵌解释器）'
+        disp, need, reason = 'proxy-reject', '否', '代理拒绝：Lua 脚本需内嵌解释器（v1.10.0 起专属拒绝）'
     elif n in txn:
-        disp, need, reason = 'unsupported', '否', '事务：架构受限（需原子多命令）'
+        disp, need, reason = 'proxy-reject', '否', '代理拒绝：事务需排队+原子应用多命令（v1.10.0 起专属拒绝）'
     elif n in bit:
         disp, need, reason = 'unsupported', '否', '位运算：超范围'
     elif n in hll:
         disp, need, reason = 'unsupported', '否', 'HyperLogLog：可经命令层实现，尚未做（同 BIT）'
-    elif n in geo:
-        disp, need, reason = 'unsupported', '否', 'GEO：超范围'
     elif n in block:
-        disp, need, reason = 'unsupported', '否', '阻塞命令：架构受限（需长连接阻塞语义）'
+        disp, need, reason = 'proxy-reject', '否', '代理拒绝：阻塞命令需长连接阻塞语义（改用非阻塞 LPOP/RPOP/RPOPLPUSH；v1.10.0 起专属拒绝）'
     elif n in flush:
         disp, need, reason = 'unsupported', '否', '全表清空：未支持'
     elif n in keymgmt:

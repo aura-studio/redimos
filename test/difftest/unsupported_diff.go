@@ -49,20 +49,16 @@ import (
 // internal/command/unsupported.go. The two halves share the single source of
 // truth command.UnsupportedCommands so the family lists never drift.
 
-// pikaLacksNames is the set of unsupported commands that Pika v3.2.2 genuinely
-// does NOT implement and therefore rejects with the same "-ERR unknown command"
-// reply as redimos. These are the ONLY commands eligible for a byte-for-byte
-// differential against the live oracle. Every other entry in
-// command.UnsupportedCommands is a family Pika implements and so is excluded from
-// the live sequences (see the file comment).
+// pikaLacksNames is the set of unsupported commands that genuinely do NOT exist in
+// the oracle either, so both the oracle and redimos reject them with the identical
+// "-ERR unknown command" reply — the ONLY commands eligible for a byte-for-byte
+// differential. After the reject families (Pub/Sub, Lua, transactions, blocking
+// pops) were converted to first-class proxy rejections (rejected.go), the sole
+// remaining unknown-command family is Streams (absent from Redis 3.2 / Pika 3.2.2).
 var pikaLacksNames = map[string]bool{
-	// Lua scripting (需求 4.2).
-	"EVAL": true, "EVALSHA": true, "SCRIPT": true,
-	// Streams (需求 4.6).
+	// Streams (Redis 5.0+; absent from the 3.2 oracle).
 	"XADD": true, "XLEN": true, "XRANGE": true, "XREVRANGE": true,
 	"XREAD": true, "XDEL": true, "XTRIM": true, "XINFO": true,
-	// Blocking list pops (需求 4.4).
-	"BLPOP": true, "BRPOP": true, "BRPOPLPUSH": true,
 }
 
 // unsupportedArgs returns a representative argument line (WITHOUT the command
@@ -197,12 +193,14 @@ func PikaImplementsUnsupportedCommands() []Command {
 // comment and PikaImplementsUnsupportedCommands.
 func UnsupportedDiffSequences() []Sequence {
 	return []Sequence{
-		unsupportedFamilySequence("unsupported-lua",
-			"EVAL", "EVALSHA", "SCRIPT"),
+		// Streams is the only family both the oracle and redimos answer with the
+		// identical unknown-command reply, so it is the only byte-comparable one.
+		// (Lua and blocking pops are now first-class proxy rejections on redimos —
+		// see rejected.go — and would not match an oracle that either executes them
+		// (real Redis 3.2) or unknown-commands them (Pika 3.2.2), so they are covered
+		// by the in-process TestRejectedFamiliesReturnDedicatedError instead.)
 		unsupportedFamilySequence("unsupported-streams",
 			"XADD", "XLEN", "XRANGE", "XREVRANGE", "XREAD", "XDEL", "XTRIM", "XINFO"),
-		unsupportedFamilySequence("unsupported-blocking",
-			"BLPOP", "BRPOP", "BRPOPLPUSH"),
 	}
 }
 

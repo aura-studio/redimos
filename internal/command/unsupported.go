@@ -1,80 +1,42 @@
 package command
 
-// unsupported.go documents and pins down redimos' handling of the command
-// families the proxy deliberately does NOT support (requirement 4.1–4.8 and
-// design.md "明确不支持"): Pub/Sub, Lua (EVAL/EVALSHA/SCRIPT), transactions
-// (MULTI/EXEC/WATCH/UNWATCH/DISCARD), blocking pops (B*), and Streams (X*).
-// (Bit ops, HyperLogLog (PF*) and GEO (GEO*) ARE supported; FLUSHALL/FLUSHDB are
-// proxy-rejected — see bit.go, hll.go, geo.go and keys.go.)
+// unsupported.go documents how redimos disposes of the Redis commands it does not
+// serve from the DynamoDB store, and pins down the one family that is left on the
+// generic "unknown command" path.
 //
-// # Design decision: rely on the default unknown-command reply
+// # Two dispositions for "not served"
 //
-// These commands are intentionally NOT registered in the command table. The
-// router's Dispatch (router.go) already replies to any unregistered command with
-// the byte-for-byte "-ERR unknown command '<name>'\r\n", echoing the command name
-// exactly as the client sent it (requirement 3.3 / 4.8). Leaving these families
-// unregistered therefore routes them straight through that single, well-tested
-// rejection path — no per-command handler is required.
+//  1. PROXY-REJECT (registered, dedicated error). Every command that EXISTS in
+//     Redis 3.2 but the proxy declines is registered with its real arity and a
+//     descriptive rejection, so the client learns the command is recognised but
+//     intentionally unavailable (and why) instead of being told it does not exist.
+//     This covers KEYS / RENAME / RENAMENX / FLUSHALL / FLUSHDB (keys.go) and the
+//     Pub/Sub, Lua, transaction and blocking-pop families (rejected.go). The
+//     server / replication / cluster / key-management admin commands currently
+//     still fall through to (2) pending an implement-vs-reject decision.
 //
-// Why this is the correct choice for byte-for-byte oracle parity:
+//  2. UNKNOWN COMMAND (unregistered → default reply). The router's Dispatch
+//     (router.go) answers any unregistered command with the byte-for-byte
+//     "-ERR unknown command '<name>'\r\n". This is the CORRECT reply only for
+//     commands that genuinely do not exist in Redis 3.2 — namely the Streams
+//     family (X*, introduced in Redis 5.0). A real Redis 3.2 server replies with
+//     the same unknown-command error for those, so the proxy stays byte-for-byte
+//     identical to the oracle.
 //
-//   - For the families Pika v3.2.2 genuinely lacks — Lua (EVAL/EVALSHA/SCRIPT),
-//     Streams (X*), and the blocking pops (BLPOP/BRPOP/BRPOPLPUSH) — Pika itself
-//     replies "-ERR unknown command '<name>'". The default path reproduces that
-//     reply verbatim, so the proxy is byte-for-byte identical to the oracle
-//     (requirement 4.8).
-//   - For the families Pika v3.2.2 DOES implement but redimos still declines —
-//     Pub/Sub and transactions — byte-for-byte
-//     parity is impossible without actually executing the command, which is an
-//     explicit non-goal (design "非目标"). Requirements 4.1–4.7 only require that
-//     these commands return an ERROR and never silently downgrade; the
-//     unknown-command reply satisfies that exactly. Reproducing Pika's real reply
-//     (e.g. FLUSHALL's "+OK") would BE the silent downgrade the requirement
-//     forbids, so a hard error is the intended behaviour, and 4.8's parity clause
-//     scopes byte-for-byte matching to "任意不在命令矩阵内的命令" (the generic
-//     catch-all), not to these explicitly-declined families.
-//
-// The alternative — registering each command with a dedicated rejection handler
-// (as keys.go does for KEYS/RENAME, which have proxy-specific semantics) — was
-// rejected here because it would (a) add handler surface with no behavioural
-// benefit over the existing default and (b) DIVERGE from Pika's own
-// unknown-command text for the families Pika lacks, breaking 4.8 parity for
-// EVAL/X*/B* without gaining anything for the rest.
-//
-// This decision is load-bearing: it must not be silently undone. TestUnsupported*
-// (unsupported_test.go) asserts (1) each family is rejected with the exact
-// unknown-command reply and is never silently accepted, and (2) none of these
-// names is registered on a fully wired storage-backed router — so if a future
-// task accidentally registers one (e.g. implementing SETBIT), the guard fails
-// loudly rather than letting an unsupported command slip through.
+// TestUnsupported* (unsupported_test.go) guards this: the Streams family must stay
+// unregistered and reach the unknown-command reply, while the reject families must
+// return their dedicated errors and never silently succeed.
 
-// UnsupportedCommands enumerates the commands redimos explicitly does not support
-// (requirement 4.1–4.7), grouped by family. Names are the canonical uppercase
-// spellings. The list is the single source of truth shared by the guard tests
-// here and by the differential-parity tests (task 18.3), so the two never drift.
+// UnsupportedCommands enumerates the commands that must reach the generic
+// unknown-command reply: the Streams family, which does not exist in Redis 3.2.
+// Names are the canonical uppercase spellings.
 //
-// It deliberately does NOT include commands that merely have proxy-specific
-// rejections with their own handlers (KEYS, RENAME/RENAMENX — see keys.go) or the
-// Redis admin/replication commands Pika 3.2.2 also lacks (they too fall through to
-// the default unknown-command path but are outside requirement 4's families).
+// It deliberately does NOT include the proxy-reject families (Pub/Sub, Lua,
+// transactions, blocking pops — rejected.go; KEYS/RENAME/FLUSH — keys.go): those
+// are registered with dedicated rejections, so listing them here would wrongly
+// assert they fall through to the unknown-command path.
 var UnsupportedCommands = []string{
-	// Pub/Sub (requirement 4.1).
-	"SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE", "PUBLISH", "PUBSUB",
-
-	// Lua scripting (requirement 4.2).
-	"EVAL", "EVALSHA", "SCRIPT",
-
-	// Transactions (requirement 4.3).
-	"MULTI", "EXEC", "WATCH", "UNWATCH", "DISCARD",
-
-	// Blocking list pops (requirement 4.4).
-	"BLPOP", "BRPOP", "BRPOPLPUSH",
-
-	// Streams (requirement 4.6).
+	// Streams (Redis 5.0+; absent from Redis 3.2, so "unknown command" is the
+	// oracle-correct reply).
 	"XADD", "XLEN", "XRANGE", "XREVRANGE", "XREAD", "XDEL", "XTRIM", "XINFO",
-
-	// NOTE: FLUSHALL / FLUSHDB are NOT here — they are registered with a
-	// first-class proxy rejection (handleFlush / errFlushDisabled in keys.go)
-	// rather than the generic unknown-command path, so they must not be listed as
-	// unregistered.
 }

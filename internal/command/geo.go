@@ -37,6 +37,12 @@ func (r *Router) registerGeo() {
 	t.Register("GEOHASH", -2, false, r.handleGeoHash)
 	t.Register("GEORADIUS", -6, true, r.handleGeoRadius)
 	t.Register("GEORADIUSBYMEMBER", -5, true, r.handleGeoRadiusByMember)
+	// GEORADIUS_RO / GEORADIUSBYMEMBER_RO (Redis 3.2.10+) are the read-only variants:
+	// identical to the base commands but they forbid STORE / STOREDIST. Since these
+	// handlers already reject STORE/STOREDIST (parseGeoRadiusOptions returns false on
+	// any such token → syntax error), the _ro variants are exact aliases.
+	t.Register("GEORADIUS_RO", -6, false, r.handleGeoRadius)
+	t.Register("GEORADIUSBYMEMBER_RO", -5, false, r.handleGeoRadiusByMember)
 }
 
 // parseGeoUnit maps a Redis unit token to metres-per-unit.

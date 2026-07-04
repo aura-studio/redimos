@@ -116,36 +116,13 @@ func dialInProc(t *testing.T, addr string) *Client {
 	return c
 }
 
-// --- In-process: Pika-implemented families reply unknown-command ------------
-
-// TestUnsupportedPikaImplementedRejected is the always-run "Property 6 for
-// rejection" check for the families Pika v3.2.2 IMPLEMENTS (Pub/Sub,
-// transactions, bit ops, PF*, GEO*, FLUSHALL/FLUSHDB). These CANNOT be
-// byte-compared against the live oracle (Pika would execute them), so instead we
-// assert directly against redimos that each replies the exact unknown-command
-// error — proving redimos rejects rather than silently downgrading (需求
-// 4.1, 4.3, 4.5, 4.6, 4.7).
-func TestUnsupportedPikaImplementedRejected(t *testing.T) {
-	addr := startInProcRedimos(t)
-	c := dialInProc(t, addr)
-
-	cmds := PikaImplementsUnsupportedCommands()
-	if len(cmds) == 0 {
-		t.Fatal("expected at least one Pika-implemented unsupported command")
-	}
-	for _, cmd := range cmds {
-		name := string(cmd.Args[0])
-		want := resp.AppendError(nil, resp.ErrUnknownCommand(name))
-		got, err := c.DoCmd(cmd)
-		if err != nil {
-			t.Fatalf("%s: transport error: %v", cmd, err)
-		}
-		if !bytes.Equal(got, want) {
-			t.Errorf("%s = %q, want %q (must reject, never silently downgrade)",
-				cmd, string(got), string(want))
-		}
-	}
-}
+// The families redimos declines but that EXIST in Redis 3.2 (Pub/Sub, Lua,
+// transactions, blocking pops) are no longer answered with unknown-command — they
+// are first-class proxy rejections (rejected.go) with dedicated messages, asserted
+// in-process by TestRejectedFamiliesReturnDedicatedError in the command package.
+// There is therefore no longer a "Pika-implemented → unknown-command" case to
+// check here; PikaImplementsUnsupportedCommands() is now empty (see the parity
+// split test), leaving only the genuinely-absent Streams family below.
 
 // TestUnsupportedPikaLacksRejectedInProcess also asserts, always-run, that the
 // Pika-lacks families (Lua, Streams, blocking) reply the exact unknown-command

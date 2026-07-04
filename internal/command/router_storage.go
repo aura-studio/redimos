@@ -150,6 +150,9 @@ func (r *Router) registerDataCommands() {
 	// GEO is a Sorted Set with a geohash score, so it is served purely from the
 	// zset store — always available, no separate seam required.
 	r.registerGeo()
+	// Real Redis 3.2 families the proxy declines with a first-class rejection
+	// (Pub/Sub, Lua, transactions, blocking pops) — see rejected.go.
+	r.registerRejected()
 }
 
 // now returns the current epoch seconds using the router's injected clock,
