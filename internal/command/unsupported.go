@@ -69,9 +69,6 @@ var UnsupportedCommands = []string{
 	// Blocking list pops (requirement 4.4).
 	"BLPOP", "BRPOP", "BRPOPLPUSH",
 
-	// HyperLogLog (requirement 4.6).
-	"PFADD", "PFCOUNT", "PFMERGE",
-
 	// GEO (requirement 4.6).
 	"GEOADD", "GEODIST", "GEOPOS", "GEOHASH", "GEORADIUS", "GEORADIUSBYMEMBER",
 

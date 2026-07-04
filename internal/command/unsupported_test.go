@@ -47,13 +47,6 @@ func representativeArgs(cmd string) string {
 		return "k 0"
 	case "BRPOPLPUSH":
 		return "src dst 0"
-	// HyperLogLog.
-	case "PFADD":
-		return "hll a"
-	case "PFCOUNT":
-		return "hll"
-	case "PFMERGE":
-		return "dst src"
 	// GEO.
 	case "GEOADD":
 		return "geo 13.36 38.11 palermo"
@@ -149,7 +142,6 @@ func TestUnsupportedCommandsAreErrorRepliesNotDowngrade(t *testing.T) {
 		"EVAL":      "return 1 0",  // 4.2 Lua
 		"MULTI":     "",            // 4.3 transactions
 		"BLPOP":     "k 0",         // 4.4 blocking
-		"PFADD":     "hll a",       // 4.6 HyperLogLog
 		"GEOADD":    "geo 13 38 m", // 4.6 GEO
 		"XADD":      "s * f v",     // 4.6 Streams
 	}
