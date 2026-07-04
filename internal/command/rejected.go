@@ -108,6 +108,19 @@ const (
 	// SET-ACTIVE-EXPIRE, SEGFAULT) — no single reply is correct and several are
 	// meaningless or actively dangerous on a stateless proxy.
 	errDebugUnsupported = "ERR DEBUG is not supported on this proxy (server-internal debugging knobs are not available)"
+
+	// The commands below cannot be IMPLEMENTED on a stateless DynamoDB proxy — they
+	// require Redis' internal RDB serialization, another live Redis instance, or a
+	// replication backlog. But they exist in Redis 3.2, so they are still declined
+	// with a dedicated rejection (disposition is independent of implementability)
+	// rather than left on the unknown-command path.
+	errDumpUnsupported          = "ERR DUMP is not supported on this proxy (it requires Redis' internal RDB serialization)"
+	errRestoreUnsupported       = "ERR RESTORE is not supported on this proxy (it requires deserializing a Redis RDB payload)"
+	errRestoreAskingUnsupported = "ERR RESTORE-ASKING is not supported on this proxy (Redis Cluster slot migration plus RDB deserialization)"
+	errMigrateUnsupported       = "ERR MIGRATE is not supported on this proxy (it requires DUMP/RESTORE against another Redis instance)"
+	errSyncUnsupported          = "ERR SYNC is not supported on this proxy (there is no in-memory dataset to stream as RDB)"
+	errPsyncUnsupported         = "ERR PSYNC is not supported on this proxy (there is no replication backlog or offset)"
+	errSlaveofUnsupported       = "ERR SLAVEOF is not supported on this proxy (it owns no local dataset and cannot replicate)"
 )
 
 // registerRejected registers the deliberately-declined-but-real Redis 3.2 families
@@ -155,6 +168,16 @@ func (r *Router) registerRejected() {
 	r.registerReject("CLUSTER", -2, errClusterUnsupported)
 	r.registerReject("LATENCY", -2, errLatencyUnsupported)
 	r.registerReject("DEBUG", -1, errDebugUnsupported)
+
+	// Real Redis 3.2 commands that cannot be implemented here (RDB serialization /
+	// another Redis / replication) but are still declined explicitly.
+	r.registerReject("DUMP", 2, errDumpUnsupported)
+	r.registerReject("RESTORE", -4, errRestoreUnsupported)
+	r.registerReject("RESTORE-ASKING", -4, errRestoreAskingUnsupported)
+	r.registerReject("MIGRATE", -6, errMigrateUnsupported)
+	r.registerReject("SYNC", 1, errSyncUnsupported)
+	r.registerReject("PSYNC", 3, errPsyncUnsupported)
+	r.registerReject("SLAVEOF", 3, errSlaveofUnsupported)
 }
 
 // registerReject registers a single command as a first-class proxy rejection: the

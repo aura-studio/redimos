@@ -28,7 +28,7 @@ reject = set('keys rename renamenx flushall flushdb'.split())
 pubsub = set('subscribe unsubscribe psubscribe punsubscribe publish pubsub'.split())
 script = set('eval evalsha script'.split())
 txn = set('multi exec discard watch unwatch'.split())
-admin = set('slaveof sync psync'.split())
+admin = set()  # all former admin/replication commands are now proxy-reject (reject_extra)
 # Individual real-Redis-3.2 commands promoted from unsupported to proxy-reject as the
 # maintainer converts them one by one (each with its own dedicated message).
 reject_extra = {
@@ -37,6 +37,13 @@ reject_extra = {
     'readonly':  '代理拒绝：Redis Cluster replica 只读服务开关，非 cluster 代理无 replica/slot 可切换（v1.12.0 起专属拒绝）',
     'readwrite': '代理拒绝：清除 Cluster replica 只读标志（READONLY 的反向），无 cluster/replica 状态可复位（v1.13.0 起专属拒绝）',
     'replconf':  '代理拒绝：master↔replica 复制子协议（端口/capa 协商 + ACK offset 心跳），无复制链路/offset（v1.13.0 起专属拒绝）',
+    'dump':           '代理拒绝：需 Redis 内部 RDB 序列化，代理不产出（v1.18.0；实现不了但显式拒绝而非未知命令）',
+    'restore':        '代理拒绝：需反序列化 Redis RDB payload，代理无 RDB 解析器（v1.18.0）',
+    'restore-asking': '代理拒绝：Cluster 槽迁移变体 + 继承 RESTORE 的 RDB 反序列化，均不适用（v1.18.0）',
+    'migrate':        '代理拒绝：需对另一个真 Redis 做 DUMP/RESTORE + 删本地，代理无此对端（v1.18.0）',
+    'sync':           '代理拒绝：需把数据集 dump 成 RDB blob 流式复制，代理无内存数据集表示（v1.18.0）',
+    'psync':          '代理拒绝：需复制 ID + 逐字节 offset backlog，stateless 代理从无（v1.18.0）',
+    'slaveof':        '代理拒绝：代理无本地数据集，当不了 replica 也当不了 master（v1.18.0）',
     'randomkey': '代理拒绝：分区表上取随机键需无界全表扫（同 KEYS）；用 SCAN（v1.14.0 起专属拒绝）',
     'move':      '代理拒绝：跨 DB 搬键=按新 pk 前缀重写整集合，非原子（同 RENAME）（v1.14.0 起专属拒绝）',
     'sort':      '代理拒绝：BY/GET 每元素每模式一次外部读（无界扇出）+ STORE 非原子整集合替换（v1.14.0 起专属拒绝）',
@@ -62,7 +69,7 @@ geonew = set('geoadd geodist geopos geohash georadius georadiusbymember'.split()
 geo = set('georadius_ro georadiusbymember_ro'.split())
 block = set('blpop brpop brpoplpush'.split())
 flush = set('flushall flushdb'.split())
-keymgmt = set('migrate dump restore restore-asking'.split())
+keymgmt = set()  # migrate/dump/restore/restore-asking are now proxy-reject (reject_extra)
 # Newly implemented — now served via redimo. Kept as named sets so the table can
 # badge them as recently added.
 newly = set('msetnx substr touch zlexcount zremrangebylex'.split())  # v1.4.0

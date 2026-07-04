@@ -15,7 +15,7 @@
 
 | 维度 | 状态 |
 |---|---|
-| 命令覆盖 | 174 条中 **114 条经 redimo 存储支持**（含 GEO+`_ro`、BIT、HLL+`PFDEBUG`）；**35 条代理拒绝**（KEYS/RENAME/FLUSH + 发布订阅/Lua/事务/阻塞 + v1.11–1.14 所有「3.2 里真实存在但故意拒」的命令）；**14 条连接/桩**（含 v1.15 的 SAVE/BGSAVE/BGREWRITEAOF/LASTSAVE/ROLE/WAIT/PFSELFTEST 固定回复桩）；**仅剩 7 条不支持**（未知命令路径，全是架构不可能项：`sync`/`psync`/`slaveof`/`dump`/`restore`/`restore-asking`/`migrate`，见 §11） |
+| 命令覆盖 | 174 条中 **114 条经 redimo 存储支持**（含 GEO+`_ro`、BIT、HLL+`PFDEBUG`）；**42 条代理拒绝**（专属错误消息）；**14 条连接/桩**（含 SAVE/BGSAVE/…/WAIT/ROLE/PFSELFTEST 固定回复桩）；**4 条连接层**。**未知命令路径清零**：174 条真实 3.2 命令**全部显式处理**（v1.18.0 起，连 `dump`/`restore`/`migrate`/`sync`/`psync`/`slaveof` 等实现不了的也注册为代理拒绝而非未知命令） |
 | **字符/字节安全** | ✅ **完全对齐**：key、string 值、hash 字段名/值、set/zset 成员、list 元素对 0x00–0xff 全部 256 个字节值与 Redis 一致，无碰撞（v2.0.1 起） |
 | **并发原子性** | ⚠️ **部分等同**：单项读改写（INCR/HINCRBY/APPEND…）、分值自增、**SET NX/SETNX（v1.9.0 起）**已原子；其余多项/多步写（S\*STORE、Z\*STORE、SMOVE、RPOPLPUSH、部分写可见性）**非原子**——受 DynamoDB 单事务 100 项上限所限，大结果集无法完全等同 Redis 单线程模型 |
 | 差分（单连接） | 大量命令字节一致；残余差异见 §4 |
@@ -51,6 +51,7 @@
 | redimos **v1.16.0** | **内部 pk 前缀统一为 `{n}:`**（db0=`0:`、db1=`1:`、…，去掉旧的 db0=`0:`/dbN=`d{n}:` 不对称）；纯内部、Redis 协议不可见、无碰撞、对迁移零影响 |
 | redimo **v2.0.3** | **修复 SCAN**：`ScanMetaKeys` 的过滤把排序键 `#sk = :meta` 当 String 比，但 sk 自 v2.0.1 起是 Binary，导致真实 DynamoDB 上 **SCAN 恒空**（GET 等不受影响）。改用 Binary `encodeSK(MetaSK)` 匹配 |
 | redimos **v1.17.0** | 升级 redimo v2.0.3，**SCAN 现在能用了**（实测真 DynamoDB：db0 与多 db 均正确按库返回 + MATCH 过滤）。KEYS 代理拒绝时提示的「用 SCAN」至此名副其实 |
+| redimos **v1.18.0** | 最后 7 条「架构不可能」命令 **DUMP/RESTORE/RESTORE-ASKING/MIGRATE/SYNC/PSYNC/SLAVEOF** → 代理拒绝（各带专属消息）。**未知命令路径清零**：174 条真实 Redis 3.2 命令全部显式处理。代理拒绝 42 / 不支持 0 |
 
 ---
 
@@ -186,9 +187,9 @@ HyperLogLog 是存在 Redis String 里的 "HYLL" blob;和 BIT 一样 **纯命令
 | **真能实现** | 1 | ✅ `pfdebug`（v1.15.0） | 命令层解包 HYLL 的 16384×6-bit 寄存器。**GETREG 实测字节兼容**（Redis 稀疏/稠密两端一致）；ENCODING/TODENSE/DECODE 因 redimos 恒 DENSE 对 Redis 稀疏态 approx |
 | **固定回复即正确（stub）** | 7（✅ **全部落地**，v1.15.0） | ✅ `save`→`+OK` · ✅ `bgsave`→`+Background saving started` · ✅ `bgrewriteaof`→`+Background append only file rewriting started` · ✅ `lastsave`→`:<当前秒>` · ✅ `role`→`[master,0,[]]` · ✅ `wait`→`:0` · ✅ `pfselftest`→`+OK`（均实测与 3.2 稳态一致） | 零 DynamoDB 交互、零并发隐患，让标准客户端/框架（写后 `WAIT`、连接自检等）不再撞未知命令 |
 | **代理拒绝（3.2 里有但故意拒）** | 12（✅ **全部落地**） | ✅ `shutdown`（多租户 DoS，v1.11.0）· ✅ `asking`（Cluster 语义，v1.11.0）· ✅ `readonly`（v1.12.0）· ✅ `readwrite`（v1.13.0）· ✅ `randomkey`（无界全扫，同 KEYS）· ✅ `move`（整集合迁移非原子，同 RENAME）· ✅ `sort`（`BY/GET` 无界扇出 + `STORE` 非原子）· ✅ `object`（暴露 Redis 内部编码）· ✅ `monitor`（需跨连接命令总线）· ✅ `cluster`（纯 Cluster 语义）· ✅ `latency`（有状态进程内监控）· ✅ `debug`（多子命令，含 SEGFAULT 真崩）—— 均 v1.14.0 | 已全部注册专属拒绝错误（同 KEYS/RENAME/FLUSH），比未知命令更利于客户端识别 |
-| **架构上不可能** | 8（✅ 已落地 1） | ✅ `replconf`（复制子协议，v1.13.0 起代理拒绝）· `dump`/`restore`/`restore-asking`（需 Redis 内部 RDB 序列化+CRC64）· `migrate`（需另一个真 Redis）· `sync`/`psync`（需把数据集 dump 成 RDB blob 流式复制）· `slaveof`（需复制 backlog/主从链路） | **可实现性 ≠ 处置**：这些实现不了，但仍可选择注册「代理拒绝」（专属消息）而非落未知命令。`replconf` 即按此处理 |
+| **架构上不可能** | 8（✅ **全部代理拒绝**） | ✅ `replconf`（v1.13.0）· ✅ `dump`/`restore`/`restore-asking`（需 Redis 内部 RDB 序列化+CRC64）· ✅ `migrate`（需另一个真 Redis）· ✅ `sync`/`psync`（需数据集 dump 成 RDB blob 流式复制）· ✅ `slaveof`（需复制 backlog/主从链路）—— 后 7 条均 v1.18.0 | **可实现性 ≠ 处置**：这些实现不了，但已全部注册「代理拒绝」（专属消息）而非落未知命令 |
 
-**一句话结论（v1.15.0 后）**：评估里「真能实现」(pfdebug) 与「7 个固定回复 stub」**已全部落地**；「宜代理拒绝」12 条也已全落地。**未知命令路径现在只剩 7 条架构不可能项**（`sync`/`psync`/`slaveof`/`dump`/`restore`/`restore-asking`/`migrate`）——它们要么要 Redis 内部 RDB 格式、要么要另一个真 Redis、要么要复制 backlog/主从链路,**这就是 DynamoDB 无状态代理的天花板**。若愿意,这 7 条也可像 `replconf` 那样从「未知命令」上移到「代理拒绝」(处置与可实现性正交),但收益仅是错误消息更友好。
+**一句话结论（v1.18.0 后）**：评估里的四类**已全部落地** —— pfdebug 实现、7 个 stub、12 条宜代理拒绝、8 条架构不可能（后者实现不了但也全部注册为代理拒绝）。**至此 174 条真实 Redis 3.2 命令没有一条落「未知命令」路径**：要么经 redimo 存储、要么固定回复桩、要么连接层、要么带专属消息的代理拒绝。那 8 条架构不可能项仍是 **DynamoDB 无状态代理的能力天花板**（要 RDB 内部格式 / 另一个真 Redis / 复制 backlog），只是现在拒得更友好、可识别。
 
 > 评审方法：4 个评审 agent 分组给判定 + 4 个对抗 agent 逐条反驳「能实现/可 stub」的主张 + 1 个综合。`sort` 即被对抗评审从「能实现」下调为「代理拒绝」（裸 SORT 机械可拼，但 `BY/GET` 无界、`STORE` 非原子、byteCompat 仅 approx）。
 
