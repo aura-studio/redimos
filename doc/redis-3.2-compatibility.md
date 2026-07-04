@@ -17,7 +17,7 @@
 |---|---|
 | 命令覆盖 | 174 条中 111 条经 redimo 存储支持（含 v1.5/v1.8 GEO、v1.6 BIT、v1.7 HLL 家族）；其余为控制面（连接/桩，不需存储）或未支持家族（阻塞/脚本/事务/复制…） |
 | **字符/字节安全** | ✅ **完全对齐**：key、string 值、hash 字段名/值、set/zset 成员、list 元素对 0x00–0xff 全部 256 个字节值与 Redis 一致，无碰撞（v2.0.1 起） |
-| **并发原子性** | ⚠️ **部分等同**：单项读改写（INCR/HINCRBY/APPEND…）与分值自增已原子；多项/多步写（S\*STORE、Z\*STORE、SMOVE、RPOPLPUSH、SETNX、部分写可见性）**非原子**，与 Redis 单线程模型不等同 |
+| **并发原子性** | ⚠️ **部分等同**：单项读改写（INCR/HINCRBY/APPEND…）、分值自增、**SET NX/SETNX（v1.9.0 起）**已原子；其余多项/多步写（S\*STORE、Z\*STORE、SMOVE、RPOPLPUSH、部分写可见性）**非原子**——受 DynamoDB 单事务 100 项上限所限，大结果集无法完全等同 Redis 单线程模型 |
 | 差分（单连接） | 大量命令字节一致；残余差异见 §4 |
 
 一句话：**单连接 / 无争用下 redimos 与 Redis 3.2 高度兼容；并发原子性与若干平台相关项（浮点精度、DynamoDB 数值域）是结构性差异。**
@@ -40,6 +40,8 @@
 | redimos **v1.6.0** | 新增 **BIT 家族**（SETBIT/GETBIT/BITCOUNT/BITPOS/BITOP/BITFIELD），纯命令层，单键字节兼容 |
 | redimos **v1.7.0** | 新增 **HLL 家族**（PFADD/PFCOUNT/PFMERGE），纯命令层,Redis 3.2 hll.c 忠实移植 |
 | redimos **v1.8.0** | **GEO 改为字节兼容版**：在 zset 之上重写（member.score = 52-bit geohash，与 Redis 同构），弃用 redimo 的 S2 seam；GEOPOS/GEOHASH/GEODIST/WITHHASH 与 Redis 3.2 **逐字节一致**（实测 265/265 差分通过） |
+| redimo **v2.0.2** | 新增 `CreateTypeIfAbsent`：SETNX/SET NX 的原子占位原语（条件 meta 写） |
+| redimos **v1.9.0** | **SET NX / SETNX 原子化**：改用 redimo v2.0.2 `CreateTypeIfAbsent` 单条条件 meta 写占位，消除 check-then-set 竞态（实测 30×50 并发每轮恰好一个 `:1`） |
 
 ---
 
@@ -92,12 +94,14 @@ Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多
 | hash 自增 | HINCRBY/HINCRBYFLOAT | ✅ 原子（HSETCAS，v1.2.0 起） |
 | zset 分值自增 | ZINCRBY | ✅ 原子（DynamoDB 原生 ADD） |
 | 不同成员计数 | SADD/ZADD/HSET distinct | ✅ 稳态计数正确 |
-| **NX 条件写** | SET NX / SETNX | ❌ 非原子（check-then-set，并发可多个"赢"） |
+| **NX 条件写** | SET NX / SETNX | ✅ **原子（v1.9.0 起）**：单条条件 meta 写占位，并发只有一个"赢" |
 | **多步复合写** | S\*STORE / Z\*STORE / SMOVE / RPOPLPUSH 中间态 | ❌ 非原子（dest 清空-重填非事务） |
 | **部分写可见性** | SCARD/ZCARD/LLEN vs 实际成员 | ❌ 并发读可见半写中间态 |
 | 删除竞态 | delete-on-empty、DEL+重建 | ❌ 非原子（Load→DeleteMeta + 异步回收） |
 
-**根因**：`meta + data + cnt` 多步写未用 `TransactWriteItems` 包裹。要整体对齐需为每条多 item 命令加事务（受 DynamoDB 25/100 item、成本、无部分成功限制）。
+**SET NX / SETNX（v1.9.0 已收口）**：改用 redimo v2.0.2 的 `CreateTypeIfAbsent` —— 一条条件 `UpdateItem`（`attribute_not_exists(#t) OR #exp <= :now`）原子占住 meta 项，把"存在性判断 + 建类型"并成一步，消除了原先 `keyLive` 读 → 写之间的 TOCTOU 窗口。**实测**：30 轮 × 50 并发 SETNX 打同一新鲜键 → 每轮恰好一个 `:1`（与真 Redis 3.2 一致）；新鲜/同类型/异类型/过期键 21 项差分逐字节一致。残留仅一个崩溃窗口（占位成功后、写 value 前进程死掉 → 一个"活着的空串键"），非并发正确性问题,且与所有 redimos 写共用惰性回收兜底。
+
+**其余多步写的根因与天花板**：`meta + data + cnt` 跨多个 DynamoDB item 的写未用 `TransactWriteItems` 包裹。**关键约束**：DynamoDB 事务上限为 **单事务 100 项 / 4MB**，而 Redis 的 set/zset/list 可含百万成员。因此**大结果集的 `S*STORE`/`Z*STORE`、大 key 的 `DEL`、`SADD` 超过 100 成员**等本质上无法在单个事务里完成（必须分片 → 跨片非原子），**"完全等同 Redis 单线程原子性"在 DynamoDB 上不可达**——这不是实现取舍，而是平台天花板（redimo 自身的 `S*STORE` 也是"读 + 写两步"）。可原子化的是**成员数有界**的复合写（`SMOVE` ≤4 项、`RPOPLPUSH` 有界、`MSETNX` ≤50 键），设计上可用 `TransactWriteItems` 收口,SETNX 是这条路线上第一个落地的（且因为只动一个 meta 项,连事务都不需要）。
 
 ---
 
@@ -105,8 +109,8 @@ Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多
 
 | 项 | 类型 | 说明 |
 |---|---|---|
-| SET NX / SETNX 原子性 | 原子性 | 需 meta 层"条件创建"原语；属多步写非原子的一员，宜与下一项一并做 |
-| 多步写事务化 | 架构 | 用 `TransactWriteItems` 收口 S\*STORE/Z\*STORE/SMOVE/RPOPLPUSH/SETNX + 部分写可见性 |
+| ~~SET NX / SETNX 原子性~~ | 原子性 | ✅ **v1.9.0 已完成**（redimo v2.0.2 `CreateTypeIfAbsent` 条件占位，见 §5） |
+| 多步写事务化（有界部分） | 架构 | 用 `TransactWriteItems` 收口成员数**有界**的复合写（SMOVE/RPOPLPUSH/MSETNX≤50）；`S*STORE`/`Z*STORE` 等无界结果集受 100 项/4MB 事务上限所限**无法完全原子**，仅能分片（跨片非原子）|
 | score 解析对齐 | 差分 | 移植 glibc `strtod` 语义 |
 | arity 错误文本 | 差分 | 系统性改成 3.2 裸大写风格（测试改动大） |
 | GEO STORE/STOREDIST | 功能 | GEO 家族已在 **v1.8.0 字节兼容（见 §7）**；仅余 `STORE`/`STOREDIST` 两个可选项未做（GEORADIUS 结果写入另一 zset），其余全部逐字节一致 |
