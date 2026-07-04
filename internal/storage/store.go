@@ -25,6 +25,7 @@ import (
 	"math/rand"
 	"sort"
 	"strconv"
+	"sync/atomic"
 
 	redimo "github.com/aura-studio/redimo/v2"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -145,7 +146,11 @@ type Store interface {
 	// race past a conflicting type, and the counter can never lose an increment.
 	// No read-then-write window exists here, so unlike the String value RMW
 	// (SetStringIfEquals) this needs no compare-and-set retry.
-	EnsureType(ctx context.Context, pk, expected string, cntDelta int64) error
+	//
+	// It returns newCount, the member count AFTER the delta was applied, read back from
+	// the same atomic write. Callers that empty a collection use this authoritative count
+	// (instead of a second racy Load) to decide deletion — see DeleteMetaIfEmpty.
+	EnsureType(ctx context.Context, pk, expected string, cntDelta int64) (newCount int64, err error)
 
 	// CreateTypeIfAbsent atomically establishes the meta item for pk with the given
 	// type ONLY IF the key is logically absent — no meta item, or a meta item that
@@ -173,6 +178,13 @@ type Store interface {
 	// absent. existed reports whether a meta item was present. Reclaiming the key's
 	// data items is the lazy deleter's job (task 11.1).
 	DeleteMeta(ctx context.Context, pk string) (existed bool, err error)
+
+	// DeleteMetaIfEmpty removes the meta item ONLY IF its member count is absent or <= 0.
+	// It is the concurrency-safe deletion for a collection that a count-adjusting write
+	// just emptied: a concurrent write that raised the count makes the conditional fail,
+	// so a freshly-added member is never stranded under a removed meta. deleted reports
+	// whether a meta item was actually removed.
+	DeleteMetaIfEmpty(ctx context.Context, pk string) (deleted bool, err error)
 
 	// DeleteMembers reclaims all of a key's data-member items — every item under
 	// the pk except the meta item (sk = "#meta"). It is the storage primitive
@@ -789,15 +801,14 @@ func clampBatchSize(n int) int {
 	return n
 }
 
-func (s *redimoStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) error {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	err := s.client.EnsureType(pk, redimo.KeyType(expected), cntDelta)
+func (s *redimoStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
+	// ctx is accepted by the seam but not yet threaded down.
+	newCount, err := s.client.EnsureType(pk, redimo.KeyType(expected), cntDelta)
 	if errors.Is(err, redimo.ErrWrongType) {
-		return ErrWrongType
+		return 0, ErrWrongType
 	}
 
-	return err
+	return newCount, err
 }
 
 func (s *redimoStore) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
@@ -827,6 +838,10 @@ func (s *redimoStore) Persist(_ context.Context, pk string) (bool, error) {
 
 func (s *redimoStore) DeleteMeta(_ context.Context, pk string) (bool, error) {
 	return s.client.DeleteMeta(pk)
+}
+
+func (s *redimoStore) DeleteMetaIfEmpty(_ context.Context, pk string) (bool, error) {
+	return s.client.DeleteMetaIfEmpty(pk)
 }
 
 func (s *redimoStore) DeleteMembers(_ context.Context, pk string) (int, error) {
@@ -940,6 +955,15 @@ func (s *redimoStore) SetStringIfEquals(_ context.Context, pk string, newVal, ol
 // The loop is bounded by MaxRMWRetries; when every attempt loses its race it
 // returns ErrRMWMaxRetries (pathological hot-key contention) rather than looping
 // forever or silently dropping the write. attempt is always called at least once.
+// rmwExhausted counts casRetry loops that ran out of retries under contention. It is a
+// process-wide operational signal for hot-key CAS pressure, surfaced via RMWExhausted.
+var rmwExhausted atomic.Uint64
+
+// RMWExhausted returns the number of read-modify-write (CAS) loops that exhausted their
+// bounded retry budget and surfaced ErrRMWMaxRetries. It backs the
+// rmw_max_retries_exhausted_total metric.
+func RMWExhausted() uint64 { return rmwExhausted.Load() }
+
 func casRetry(attempt func() (ok bool, err error)) error {
 	for i := 0; i < MaxRMWRetries; i++ {
 		ok, err := attempt()
@@ -952,6 +976,8 @@ func casRetry(attempt func() (ok bool, err error)) error {
 		// ok=false: the conditional write lost a race with a concurrent writer.
 		// Loop to re-read and recompute on top of the value that actually landed.
 	}
+
+	rmwExhausted.Add(1)
 
 	return ErrRMWMaxRetries
 }

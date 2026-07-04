@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"log"
 	"strconv"
 	"strings"
 
@@ -93,9 +94,34 @@ func (r *Router) writeStoreError(c *server.Conn, err error) {
 		w.Error(resp.ErrHashNotInteger)
 	case errors.Is(err, storage.ErrHashNotFloat):
 		w.Error(resp.ErrHashNotFloat)
+	case errors.Is(err, storage.ErrRMWMaxRetries):
+		// A meaningful, retryable redimos error (hot-key CAS exhaustion) — surface it
+		// verbatim rather than collapsing it into the generic backend error below.
+		w.Error(resp.ErrRMWMaxRetries)
 	default:
-		w.Error("ERR " + err.Error())
+		// Do not leak raw backend/SDK error text to the client (DynamoDB
+		// validation/condition/attribute details are a reconnaissance surface and
+		// non-Redis noise). Reply a fixed retryable error and log the real cause
+		// server-side for operators.
+		log.Printf("redimos: unmapped store error: %v", err)
+		w.Error(resp.ErrBackendError)
 	}
+}
+
+// resultCapExceeded reports whether a collection of the given member count exceeds the
+// configured --max-collection-result cap, and if so writes the ErrCollectionTooLarge
+// reply. Whole-collection reads (HGETALL/SMEMBERS/LRANGE/ZRANGE...) and *STORE operand
+// loads call it with the key's maintained meta.cnt BEFORE doing the backend read, so an
+// oversized key is rejected without ever materializing it in proxy memory. A cap of 0
+// disables the check.
+func (r *Router) resultCapExceeded(w *resp.Writer, count int64) bool {
+	cap := r.Config.MaxCollectionResult
+	if cap > 0 && count > int64(cap) {
+		w.Error(resp.ErrCollectionTooLarge)
+		return true
+	}
+
+	return false
 }
 
 // adjustCount applies a member-count delta to a collection key's meta item and,
@@ -116,20 +142,21 @@ func (r *Router) adjustCount(ctx context.Context, pk string, typ meta.KeyType, d
 		return nil
 	}
 
-	if err := r.Storage.Meta.EnsureType(ctx, pk, typ, delta); err != nil {
+	newCount, err := r.Storage.Meta.EnsureType(ctx, pk, typ, delta)
+	if err != nil {
 		return err
 	}
 
-	// Only a removal can empty the collection; a positive delta never deletes.
-	if delta < 0 {
-		m, found, err := r.Storage.Meta.Load(ctx, pk)
-		if err != nil {
+	// Only a removal can empty the collection; a positive delta never deletes. Use the
+	// count returned by the SAME atomic EnsureType write, then delete the meta CONDITIONAL
+	// on the count still being <= 0 (DeleteMetaIfEmpty). This closes the previous
+	// load-then-delete TOCTOU: between an independent Load and DeleteMeta a concurrent add
+	// could restore the count, and the unconditional delete would then strand that fresh
+	// member under a removed meta (an invisible orphan). The conditional delete instead
+	// fails when a racing add has raised the count, leaving the collection intact.
+	if delta < 0 && newCount <= 0 {
+		if _, err := r.Storage.Meta.DeleteMetaIfEmpty(ctx, pk); err != nil {
 			return err
-		}
-		if found && m.Count <= 0 {
-			if _, err := r.Storage.Meta.DeleteMeta(ctx, pk); err != nil {
-				return err
-			}
 		}
 	}
 

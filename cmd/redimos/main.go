@@ -47,9 +47,10 @@ import (
 // assembly step. Every field maps to exactly one flag.
 type appConfig struct {
 	// Endpoint / auth.
-	addr        string // listen address for the RESP2 endpoint
-	requirepass string // single-password AUTH; empty disables auth
-	multiDB     bool   // permit SELECT n (n != 0)
+	addr                string // listen address for the RESP2 endpoint
+	requirepass         string // single-password AUTH; empty disables auth
+	multiDB             bool   // permit SELECT n (n != 0)
+	maxCollectionResult int    // cap on whole-collection reply/operand size (0 disables)
 
 	// DynamoDB / storage.
 	table          string // DynamoDB table name
@@ -80,6 +81,7 @@ func parseFlags() appConfig {
 	flag.StringVar(&c.addr, "addr", ":6379", "listen address for the RESP2 endpoint")
 	flag.StringVar(&c.requirepass, "requirepass", "", "single-password AUTH (empty disables auth)")
 	flag.BoolVar(&c.multiDB, "multi-db", false, "permit SELECT of non-zero DB indexes")
+	flag.IntVar(&c.maxCollectionResult, "max-collection-result", 0, "reject a whole-collection reply/operand (HGETALL/SMEMBERS/...) with more than N members (0 disables)")
 
 	flag.StringVar(&c.table, "table", "redis-data", "DynamoDB single-table name")
 	flag.StringVar(&c.consistency, "consistency", "strong", "default read consistency: strong|eventual")
@@ -109,10 +111,50 @@ func main() {
 	}
 }
 
+// validateConfig fails fast on out-of-range or malformed flags before any resource is
+// created, so an operator gets one clear boot error instead of a cryptic failure deep in
+// the storage/serving path (e.g. delete-batch-size 100 exceeding BatchWriteItem's 25, or
+// a mistyped consistency mode). The defaults are all valid, so a flag-free launch passes.
+func validateConfig(cfg appConfig) error {
+	if cfg.addr == "" {
+		return errors.New("-addr must not be empty")
+	}
+	if cfg.metricsAddr == "" {
+		return errors.New("-metrics-addr must not be empty")
+	}
+	if cfg.table == "" {
+		return errors.New("-table must not be empty")
+	}
+	if cfg.consistency != "strong" && cfg.consistency != "eventual" {
+		return fmt.Errorf("-consistency must be strong|eventual, got %q", cfg.consistency)
+	}
+	if cfg.deleteBatch < 1 || cfg.deleteBatch > 25 {
+		return fmt.Errorf("-delete-batch-size must be in [1,25], got %d", cfg.deleteBatch)
+	}
+	if cfg.retryMax < 1 {
+		return fmt.Errorf("-retry-max-attempts must be >= 1, got %d", cfg.retryMax)
+	}
+	if cfg.scanCapacity < 1 {
+		return fmt.Errorf("-scan-capacity must be >= 1, got %d", cfg.scanCapacity)
+	}
+	if cfg.slowlogCapacity < 1 {
+		return fmt.Errorf("-slowlog-capacity must be >= 1, got %d", cfg.slowlogCapacity)
+	}
+	if cfg.maxCollectionResult < 0 {
+		return fmt.Errorf("-max-collection-result must be >= 0, got %d", cfg.maxCollectionResult)
+	}
+
+	return nil
+}
+
 // run performs the full assembly and blocks serving until a shutdown signal is
 // received, then tears everything down cleanly. It returns a non-nil error only
 // for a fatal startup failure.
 func run(cfg appConfig) error {
+	if err := validateConfig(cfg); err != nil {
+		return err
+	}
+
 	// A context cancelled by SIGINT/SIGTERM drives the graceful shutdown of the
 	// listeners; the background workers are stopped explicitly (below) so they
 	// drain their queues rather than aborting on cancellation.
@@ -153,11 +195,6 @@ func run(cfg appConfig) error {
 	// so the size-guard rejection count is surfaced without metrics importing
 	// guard (requirement 18.5).
 	registry := prometheus.NewRegistry()
-	m := metrics.New(metrics.Config{
-		Registry:          registry,
-		LatencyBuckets:    metrics.DefaultLatencyBuckets,
-		InterceptionsFunc: guard.Interceptions,
-	})
 	slowlog := metrics.NewSlowLog(metrics.SlowlogConfig{
 		Capacity:  cfg.slowlogCapacity,
 		Threshold: cfg.slowlogThreshold,
@@ -203,6 +240,23 @@ func run(cfg appConfig) error {
 		},
 	})
 
+	// The command/collector metrics are built here (after the deleter and sweeper
+	// exist) so the background-reclaimer health gauges can read their live accessors.
+	// The large-key interception gauge is sourced from guard.Interceptions so the
+	// size-guard rejection count is surfaced without metrics importing guard (req 18.5).
+	m := metrics.New(metrics.Config{
+		Registry:                 registry,
+		LatencyBuckets:           metrics.DefaultLatencyBuckets,
+		InterceptionsFunc:        guard.Interceptions,
+		LazyDeleteDroppedFunc:    func() uint64 { return uint64(deleter.Dropped()) },
+		LazyDeleteFailuresFunc:   func() uint64 { return uint64(deleter.Failures()) },
+		LazyDeleteQueueDepthFunc: func() uint64 { return uint64(deleter.QueueLen()) },
+		OrphanSweepRunsFunc:      func() uint64 { return uint64(sweeper.Runs()) },
+		OrphanSweepReclaimedFunc: func() uint64 { return uint64(sweeper.Reclaimed()) },
+		OrphanSweepFailuresFunc:  func() uint64 { return uint64(sweeper.Failures()) },
+		RMWExhaustedFunc:         storage.RMWExhausted,
+	})
+
 	// --- scan: per-instance SCAN cursor registry ---------------------------
 	//
 	// The registry MUST share instID with the server (below) so a SCAN
@@ -218,8 +272,9 @@ func run(cfg appConfig) error {
 	// --- command: storage-backed router ------------------------------------
 	router := command.NewRouterWithStorage(
 		command.Config{
-			RequirePass: cfg.requirepass,
-			MultiDB:     cfg.multiDB,
+			RequirePass:         cfg.requirepass,
+			MultiDB:             cfg.multiDB,
+			MaxCollectionResult: cfg.maxCollectionResult,
 		},
 		command.Storage{
 			Store:   store,

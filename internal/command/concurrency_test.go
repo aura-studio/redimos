@@ -58,7 +58,7 @@ var _ storage.Store = (*syncStore)(nil)
 
 // --- meta primitives ---------------------------------------------------------
 
-func (s *syncStore) EnsureType(ctx context.Context, pk, expected string, cntDelta int64) error {
+func (s *syncStore) EnsureType(ctx context.Context, pk, expected string, cntDelta int64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.inner.EnsureType(ctx, pk, expected, cntDelta)
@@ -92,6 +92,12 @@ func (s *syncStore) DeleteMeta(ctx context.Context, pk string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.inner.DeleteMeta(ctx, pk)
+}
+
+func (s *syncStore) DeleteMetaIfEmpty(ctx context.Context, pk string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.DeleteMetaIfEmpty(ctx, pk)
 }
 
 func (s *syncStore) DeleteMembers(ctx context.Context, pk string) (int, error) {

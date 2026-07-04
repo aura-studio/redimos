@@ -129,7 +129,7 @@ func (r *Router) handleLPush(ctx context.Context, c *server.Conn, args [][]byte)
 		r.writeStoreError(c, err)
 		return
 	}
-	if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeList, 0); err != nil {
+	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeList, 0); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -148,7 +148,7 @@ func (r *Router) handleRPush(ctx context.Context, c *server.Conn, args [][]byte)
 		r.writeStoreError(c, err)
 		return
 	}
-	if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeList, 0); err != nil {
+	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeList, 0); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

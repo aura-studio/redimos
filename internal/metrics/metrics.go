@@ -67,6 +67,20 @@ type Config struct {
 	// interception gauge. main wires it to guard.Interceptions. When nil the
 	// gauge reads an internal atomic advanced by SetInterceptions.
 	InterceptionsFunc func() uint64
+
+	// The following optional funcs are read lazily at scrape time to surface the
+	// background reclaimer's health — queue backpressure/drops, orphan-sweep
+	// effectiveness — and the read-modify-write CAS exhaustion count, the three
+	// signals that predict orphan accumulation and hot-key contention. main wires
+	// them to the deleter/sweeper accessors and the storage RMW counter. Each nil
+	// func simply omits its collector.
+	LazyDeleteDroppedFunc    func() uint64 // pks dropped because the delete queue was full
+	LazyDeleteFailuresFunc   func() uint64 // member-reclaim attempts that errored
+	LazyDeleteQueueDepthFunc func() uint64 // current lazy-delete queue length (gauge)
+	OrphanSweepRunsFunc      func() uint64 // completed orphan-sweep runs
+	OrphanSweepReclaimedFunc func() uint64 // orphan members reclaimed by the sweep
+	OrphanSweepFailuresFunc  func() uint64 // orphan-sweep runs that errored
+	RMWExhaustedFunc         func() uint64 // RMW/CAS loops that exhausted their retries
 }
 
 // Metrics owns the proxy's Prometheus collectors and (optionally) exposes them
@@ -130,6 +144,34 @@ func New(cfg Config) *Metrics {
 	}, func() float64 { return float64(source()) })
 
 	reg.MustRegister(m.qps, m.latency, m.errors, interceptionsGauge)
+
+	// Background-reclaimer and contention gauges, each registered only when its live
+	// source was supplied (main wires them to the deleter/sweeper/storage accessors).
+	// They are read at scrape time, keeping metrics decoupled from meta/storage.
+	for _, g := range []struct {
+		src  func() uint64
+		name string
+		help string
+	}{
+		{cfg.LazyDeleteDroppedFunc, "lazy_delete_dropped_total", "pks dropped because the lazy-delete queue was full."},
+		{cfg.LazyDeleteFailuresFunc, "lazy_delete_failures_total", "lazy-delete member-reclaim attempts that errored."},
+		{cfg.LazyDeleteQueueDepthFunc, "lazy_delete_queue_depth", "current lazy-delete queue length."},
+		{cfg.OrphanSweepRunsFunc, "orphan_sweep_runs_total", "completed orphan-sweep runs."},
+		{cfg.OrphanSweepReclaimedFunc, "orphan_sweep_reclaimed_total", "orphan members reclaimed by the weekly sweep."},
+		{cfg.OrphanSweepFailuresFunc, "orphan_sweep_failures_total", "orphan-sweep runs that errored."},
+		{cfg.RMWExhaustedFunc, "rmw_max_retries_exhausted_total", "read-modify-write CAS loops that exhausted their retries."},
+	} {
+		if g.src == nil {
+			continue
+		}
+		src := g.src
+		reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      g.name,
+			Help:      g.help,
+		}, func() float64 { return float64(src()) }))
+	}
+
 	return m
 }
 

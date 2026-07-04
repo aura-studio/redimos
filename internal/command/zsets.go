@@ -221,7 +221,7 @@ func (r *Router) handleZAdd(ctx context.Context, c *server.Conn, args [][]byte) 
 		r.writeStoreError(c, err)
 		return
 	}
-	if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeZSet, 0); err != nil {
+	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeZSet, 0); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -331,7 +331,7 @@ func (r *Router) handleZIncrBy(ctx context.Context, c *server.Conn, args [][]byt
 		r.writeStoreError(c, err)
 		return
 	}
-	if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeZSet, 0); err != nil {
+	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeZSet, 0); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -1338,7 +1338,7 @@ func (r *Router) handleZStore(ctx context.Context, c *server.Conn, args [][]byte
 	}
 
 	// Create dest as a fresh Sorted Set and add the result members, maintaining cnt.
-	if err := r.Storage.Meta.EnsureType(ctx, destPK, meta.TypeZSet, 0); err != nil {
+	if _, err := r.Storage.Meta.EnsureType(ctx, destPK, meta.TypeZSet, 0); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

@@ -94,13 +94,17 @@ func NewMetaStore(store storage.Store, enqueue DeletionEnqueuer) *MetaStore {
 // single atomic conditional UpdateItem. A zero cntDelta still establishes/verifies
 // the type (e.g. String writes that keep no member count). On a type conflict it
 // returns ErrWrongType and no item is modified.
-func (m *MetaStore) EnsureType(ctx context.Context, pk string, expected KeyType, cntDelta int64) error {
-	err := m.store.EnsureType(ctx, pk, string(expected), cntDelta)
+// It returns newCount, the member count after the delta was applied (read from the same
+// atomic write); callers that keep no count (cntDelta 0) can ignore it, while a
+// count-adjusting caller uses it to decide emptiness without a second read (see
+// DeleteMetaIfEmpty / adjustCount).
+func (m *MetaStore) EnsureType(ctx context.Context, pk string, expected KeyType, cntDelta int64) (newCount int64, err error) {
+	newCount, err = m.store.EnsureType(ctx, pk, string(expected), cntDelta)
 	if errors.Is(err, storage.ErrWrongType) {
-		return ErrWrongType
+		return 0, ErrWrongType
 	}
 
-	return err
+	return newCount, err
 }
 
 // CreateTypeIfAbsent atomically claims a logically-absent key (no meta item, or one
@@ -155,6 +159,25 @@ func (m *MetaStore) DeleteMeta(ctx context.Context, pk string) (existed bool, er
 	}
 
 	return existed, nil
+}
+
+// DeleteMetaIfEmpty removes the meta item ONLY IF its member count is still <= 0, then
+// enqueues the pk for asynchronous data-item reclamation (as DeleteMeta does). It is the
+// concurrency-safe deletion used when a count-adjusting write empties a collection: a
+// concurrent write that raised the count makes the conditional fail, so the meta survives
+// and the freshly-added member is not stranded under a removed meta. deleted reports
+// whether a meta item was actually removed.
+func (m *MetaStore) DeleteMetaIfEmpty(ctx context.Context, pk string) (deleted bool, err error) {
+	deleted, err = m.store.DeleteMetaIfEmpty(ctx, pk)
+	if err != nil {
+		return deleted, err
+	}
+
+	if deleted {
+		m.enqueue.Enqueue(pk)
+	}
+
+	return deleted, nil
 }
 
 // IsExpired reports whether m is expired relative to nowEpoch (epoch seconds): a

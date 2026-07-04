@@ -179,6 +179,26 @@ const (
 	// "传播为 -ERR ...（保留可重试语义）" contract. Requirement 18.8.
 	ErrBackendThrottled = "ERR backend throttled, retry later"
 
+	// ErrBackendError is the generic reply for any storage/AWS-SDK error the command
+	// layer does not map to a specific Redis error. The raw backend text (DynamoDB
+	// validation/condition/attribute details) is NEVER echoed to the client — it is a
+	// reconnaissance surface and non-Redis noise — so the real cause is logged
+	// server-side and the client gets a fixed retryable "ERR".
+	ErrBackendError = "ERR backend error, retry later"
+
+	// ErrRMWMaxRetries is returned when a read-modify-write command (APPEND/SETRANGE/
+	// INCR reconciliation) exhausts its bounded optimistic-concurrency retry budget under
+	// sustained hot-key contention. The prefix stays a plain "ERR" so the client keeps
+	// retryable semantics. It is a meaningful redimos-semantic error (not backend
+	// internals), so it is surfaced verbatim rather than via the generic ErrBackendError.
+	ErrRMWMaxRetries = "ERR read-modify-write exceeded retry limit under contention"
+
+	// ErrCollectionTooLarge is returned when a whole-collection reply or *STORE operand
+	// would materialize more members than the configured --max-collection-result cap.
+	// It is a redimos-specific protective limit (Redis has none), in the same spirit as
+	// ErrValueExceedsBackendLimit, guarding the proxy against a single-command OOM.
+	ErrCollectionTooLarge = "ERR collection size exceeds the configured maximum result limit"
+
 	// ErrOffsetOutOfRange is returned when a SETRANGE offset is negative
 	// (Redis/Pika reject a negative offset before touching the value).
 	// Requirement 5.10.

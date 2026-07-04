@@ -86,20 +86,34 @@ func (s *lazyStore) memberCount(pk string) int {
 	return s.members[pk]
 }
 
-func (s *lazyStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) error {
+func (s *lazyStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	m, ok := s.metas[pk]
 	if ok && m.Type != expected {
-		return storage.ErrWrongType
+		return 0, storage.ErrWrongType
 	}
 
 	m.Type = expected
 	m.Count += cntDelta
 	s.metas[pk] = m
 
-	return nil
+	return m.Count, nil
+}
+
+func (s *lazyStore) DeleteMetaIfEmpty(_ context.Context, pk string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	m, ok := s.metas[pk]
+	if !ok || m.Count > 0 {
+		return false, nil
+	}
+
+	delete(s.metas, pk)
+
+	return true, nil
 }
 
 func (s *lazyStore) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {

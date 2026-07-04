@@ -68,22 +68,33 @@ func newProp1Store() *prop1Store {
 // EnsureType enforces the conditional-write contract. On a type conflict it
 // returns storage.ErrWrongType before touching any state, so the key's type and
 // count are left exactly as they were.
-func (s *prop1Store) EnsureType(_ context.Context, pk, expected string, cntDelta int64) error {
+func (s *prop1Store) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
 	e := s.items[pk]
 	if e == nil || !e.exists {
 		s.items[pk] = &prop1Entry{exists: true, typ: expected, cnt: cntDelta}
-		return nil
+		return cntDelta, nil
 	}
 
 	if e.typ != expected {
 		// Conditional write fails: no item is modified.
-		return storage.ErrWrongType
+		return 0, storage.ErrWrongType
 	}
 
 	// Same type: the ADD accumulates the delta atomically.
 	e.cnt += cntDelta
 
-	return nil
+	return e.cnt, nil
+}
+
+func (s *prop1Store) DeleteMetaIfEmpty(_ context.Context, pk string) (bool, error) {
+	e := s.items[pk]
+	if e == nil || !e.exists || e.cnt > 0 {
+		return false, nil
+	}
+
+	delete(s.items, pk)
+
+	return true, nil
 }
 
 func (s *prop1Store) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
@@ -286,7 +297,7 @@ func TestProperty1TypeConsistency(t *testing.T) {
 			// checked against "no item mutated".
 			beforeMeta, beforeFound, _ := store.LoadMeta(ctx, pk)
 
-			err := ms.EnsureType(ctx, pk, expected, delta)
+			_, err := ms.EnsureType(ctx, pk, expected, delta)
 
 			m := model[pk]
 			switch {

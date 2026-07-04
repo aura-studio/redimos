@@ -114,8 +114,9 @@ func (t *throttleStore) obs(err error) error {
 
 // --- delegating methods (each forwards to inner and routes the error through obs) ---
 
-func (t *throttleStore) EnsureType(ctx context.Context, pk, expected string, cntDelta int64) error {
-	return t.obs(t.inner.EnsureType(ctx, pk, expected, cntDelta))
+func (t *throttleStore) EnsureType(ctx context.Context, pk, expected string, cntDelta int64) (int64, error) {
+	newCount, err := t.inner.EnsureType(ctx, pk, expected, cntDelta)
+	return newCount, t.obs(err)
 }
 
 func (t *throttleStore) CreateTypeIfAbsent(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
@@ -141,6 +142,11 @@ func (t *throttleStore) Persist(ctx context.Context, pk string) (bool, error) {
 func (t *throttleStore) DeleteMeta(ctx context.Context, pk string) (bool, error) {
 	existed, err := t.inner.DeleteMeta(ctx, pk)
 	return existed, t.obs(err)
+}
+
+func (t *throttleStore) DeleteMetaIfEmpty(ctx context.Context, pk string) (bool, error) {
+	deleted, err := t.inner.DeleteMetaIfEmpty(ctx, pk)
+	return deleted, t.obs(err)
 }
 
 func (t *throttleStore) DeleteMembers(ctx context.Context, pk string) (int, error) {

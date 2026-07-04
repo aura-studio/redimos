@@ -106,7 +106,7 @@ func (r *Router) ensureSetWritable(ctx context.Context, c *server.Conn, pk strin
 		r.writeStoreError(c, err)
 		return false
 	}
-	if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeSet, 0); err != nil {
+	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeSet, 0); err != nil {
 		r.writeStoreError(c, err)
 		return false
 	}
@@ -241,7 +241,7 @@ func (r *Router) handleSMembers(ctx context.Context, c *server.Conn, args [][]by
 	w := resp.NewWriter(c.Redcon())
 	pk := encodePK(c.DB(), args[1])
 
-	_, live, wrongType, err := r.setState(ctx, pk)
+	m, live, wrongType, err := r.setState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -252,6 +252,9 @@ func (r *Router) handleSMembers(ctx context.Context, c *server.Conn, args [][]by
 	}
 	if !live {
 		w.EmptyArray()
+		return
+	}
+	if r.resultCapExceeded(w, m.Count) {
 		return
 	}
 
@@ -794,7 +797,7 @@ func (r *Router) handleSetAlgebraStore(ctx context.Context, c *server.Conn, op s
 	}
 
 	// Create dest as a fresh Set and add the result members, maintaining cnt.
-	if err := r.Storage.Meta.EnsureType(ctx, destPK, meta.TypeSet, 0); err != nil {
+	if _, err := r.Storage.Meta.EnsureType(ctx, destPK, meta.TypeSet, 0); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -881,7 +884,7 @@ func (r *Router) handleSMove(ctx context.Context, c *server.Conn, args [][]byte)
 		return
 	}
 
-	if err := r.Storage.Meta.EnsureType(ctx, dstPK, meta.TypeSet, 0); err != nil {
+	if _, err := r.Storage.Meta.EnsureType(ctx, dstPK, meta.TypeSet, 0); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

@@ -44,7 +44,10 @@ type prop2Store struct {
 
 var _ storage.Store = prop2Store{}
 
-func (prop2Store) EnsureType(context.Context, string, string, int64) error { return nil }
+func (prop2Store) EnsureType(context.Context, string, string, int64) (int64, error) {
+	return 0, nil
+}
+func (prop2Store) DeleteMetaIfEmpty(context.Context, string) (bool, error) { return true, nil }
 
 func (s prop2Store) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
 	// The key's meta always exists; it is claimable only when already expired.

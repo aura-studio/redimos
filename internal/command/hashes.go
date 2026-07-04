@@ -101,7 +101,7 @@ func (r *Router) ensureHashWritable(ctx context.Context, c *server.Conn, pk stri
 		r.writeStoreError(c, err)
 		return false
 	}
-	if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeHash, 0); err != nil {
+	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeHash, 0); err != nil {
 		r.writeStoreError(c, err)
 		return false
 	}
@@ -313,7 +313,7 @@ func (r *Router) handleHGetAll(ctx context.Context, c *server.Conn, args [][]byt
 	w := resp.NewWriter(c.Redcon())
 	pk := encodePK(c.DB(), args[1])
 
-	_, live, wrongType, err := r.hashState(ctx, pk)
+	m, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -324,6 +324,9 @@ func (r *Router) handleHGetAll(ctx context.Context, c *server.Conn, args [][]byt
 	}
 	if !live {
 		w.EmptyArray()
+		return
+	}
+	if r.resultCapExceeded(w, m.Count) {
 		return
 	}
 
@@ -348,7 +351,7 @@ func (r *Router) handleHKeys(ctx context.Context, c *server.Conn, args [][]byte)
 	w := resp.NewWriter(c.Redcon())
 	pk := encodePK(c.DB(), args[1])
 
-	_, live, wrongType, err := r.hashState(ctx, pk)
+	m, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -359,6 +362,9 @@ func (r *Router) handleHKeys(ctx context.Context, c *server.Conn, args [][]byte)
 	}
 	if !live {
 		w.EmptyArray()
+		return
+	}
+	if r.resultCapExceeded(w, m.Count) {
 		return
 	}
 
@@ -383,7 +389,7 @@ func (r *Router) handleHVals(ctx context.Context, c *server.Conn, args [][]byte)
 	w := resp.NewWriter(c.Redcon())
 	pk := encodePK(c.DB(), args[1])
 
-	_, live, wrongType, err := r.hashState(ctx, pk)
+	m, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -394,6 +400,9 @@ func (r *Router) handleHVals(ctx context.Context, c *server.Conn, args [][]byte)
 	}
 	if !live {
 		w.EmptyArray()
+		return
+	}
+	if r.resultCapExceeded(w, m.Count) {
 		return
 	}
 

@@ -29,6 +29,12 @@ type Config struct {
 	// selected index is stored on the connection so later commands map to the
 	// pk prefix "d{n}:". Requirement 2.8, 2.9.
 	MultiDB bool
+
+	// MaxCollectionResult caps the number of members a whole-collection reply
+	// (HGETALL/HKEYS/HVALS/SMEMBERS/LRANGE/ZRANGE...) or *STORE operand may
+	// materialize in proxy memory before the command is rejected, bounding the heap
+	// an authenticated client can force with one command. 0 disables the cap.
+	MaxCollectionResult int
 }
 
 // Router wraps a command Table with connection-layer Config and implements

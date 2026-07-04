@@ -12,7 +12,8 @@ import (
 // fakeStore is an in-memory storage.Store double for testing the meta layer
 // without a live DynamoDB. Each field lets a test script the primitive's result.
 type fakeStore struct {
-	ensureErr error
+	ensureErr   error
+	ensureCount int64
 
 	loadMeta  storage.Meta
 	loadFound bool
@@ -44,9 +45,14 @@ type ensureCall struct {
 	cntDelta int64
 }
 
-func (f *fakeStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) error {
+func (f *fakeStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
 	f.ensureCalls = append(f.ensureCalls, ensureCall{pk: pk, expected: expected, cntDelta: cntDelta})
-	return f.ensureErr
+	return f.ensureCount, f.ensureErr
+}
+
+func (f *fakeStore) DeleteMetaIfEmpty(_ context.Context, pk string) (bool, error) {
+	f.deleteCalls = append(f.deleteCalls, pk)
+	return f.deleteExisted, f.deleteErr
 }
 
 func (f *fakeStore) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
@@ -220,7 +226,7 @@ func TestEnsureType_MapsWrongType(t *testing.T) {
 	store := &fakeStore{ensureErr: storage.ErrWrongType}
 	ms := NewMetaStore(store, nil)
 
-	err := ms.EnsureType(context.Background(), "0:k", TypeHash, 1)
+	_, err := ms.EnsureType(context.Background(), "0:k", TypeHash, 1)
 	if !errors.Is(err, ErrWrongType) {
 		t.Fatalf("EnsureType error = %v, want meta.ErrWrongType", err)
 	}
@@ -238,7 +244,7 @@ func TestEnsureType_PassesThroughOtherErrors(t *testing.T) {
 	sentinel := errors.New("boom")
 	ms := NewMetaStore(&fakeStore{ensureErr: sentinel}, nil)
 
-	err := ms.EnsureType(context.Background(), "0:k", TypeString, 0)
+	_, err := ms.EnsureType(context.Background(), "0:k", TypeString, 0)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("EnsureType error = %v, want the underlying store error", err)
 	}
@@ -249,7 +255,7 @@ func TestEnsureType_PassesThroughOtherErrors(t *testing.T) {
 
 func TestEnsureType_Success(t *testing.T) {
 	ms := NewMetaStore(&fakeStore{}, nil)
-	if err := ms.EnsureType(context.Background(), "0:k", TypeSet, -2); err != nil {
+	if _, err := ms.EnsureType(context.Background(), "0:k", TypeSet, -2); err != nil {
 		t.Fatalf("EnsureType returned unexpected error: %v", err)
 	}
 }

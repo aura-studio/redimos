@@ -66,16 +66,27 @@ func newFakeStringStore() *fakeStringStore {
 	}
 }
 
-func (s *fakeStringStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) error {
+func (s *fakeStringStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
 	m := s.metas[pk]
 	if s.live[pk] && m.Type != expected {
-		return storage.ErrWrongType
+		return 0, storage.ErrWrongType
 	}
 	m.Type = expected
 	m.Count += cntDelta
 	s.metas[pk] = m
 	s.live[pk] = true
-	return nil
+	return m.Count, nil
+}
+
+func (s *fakeStringStore) DeleteMetaIfEmpty(_ context.Context, pk string) (bool, error) {
+	m := s.metas[pk]
+	if !s.live[pk] || m.Count > 0 {
+		return false, nil
+	}
+	existed := s.live[pk]
+	delete(s.live, pk)
+	delete(s.metas, pk)
+	return existed, nil
 }
 
 func (s *fakeStringStore) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
