@@ -52,6 +52,7 @@
 | redimo **v2.0.3** | **修复 SCAN**：`ScanMetaKeys` 的过滤把排序键 `#sk = :meta` 当 String 比，但 sk 自 v2.0.1 起是 Binary，导致真实 DynamoDB 上 **SCAN 恒空**（GET 等不受影响）。改用 Binary `encodeSK(MetaSK)` 匹配 |
 | redimos **v1.17.0** | 升级 redimo v2.0.3，**SCAN 现在能用了**（实测真 DynamoDB：db0 与多 db 均正确按库返回 + MATCH 过滤）。KEYS 代理拒绝时提示的「用 SCAN」至此名副其实 |
 | redimos **v1.18.0** | 最后 7 条「架构不可能」命令 **DUMP/RESTORE/RESTORE-ASKING/MIGRATE/SYNC/PSYNC/SLAVEOF** → 代理拒绝（各带专属消息）。**未知命令路径清零**：174 条真实 Redis 3.2 命令全部显式处理。代理拒绝 42 / 不支持 0 |
+| redimos **v1.19.0** | **移除内置 Pika 迁移子系统**（`internal/migrate`：dual-write / shadow-read / fallback / importer + `--dual-write`/`--pika-addr`/`--shadow-read`/`--fallback`/`--migrate-prefixes` 等 flag）。该子系统此前仅在 main.go 构造并打日志、**从未接入读写请求路径**（router 拿的是裸 store），属死脚手架；迁移改用外部 pika-migrate 工具，与本项目无关，故清除 |
 
 ---
 
