@@ -54,6 +54,12 @@ func (r *Router) registerKeys() {
 	t.Register("KEYS", 2, false, r.handleKeys)
 	t.Register("RENAME", 3, true, r.handleRename)
 	t.Register("RENAMENX", 3, true, r.handleRename)
+	// FLUSHALL / FLUSHDB are registered only to give them a first-class proxy
+	// rejection rather than the generic "unknown command" reply: flushing the
+	// keyspace would mean a full wipe of the shared DynamoDB table. Arity 1 matches
+	// Redis 3.2 (the command takes no arguments).
+	t.Register("FLUSHALL", 1, true, r.handleFlush)
+	t.Register("FLUSHDB", 1, true, r.handleFlush)
 }
 
 // Rejection error texts for the guarded / unsupported Key commands. These are
@@ -75,6 +81,12 @@ const (
 	// renaming a key would require copying an entire collection's members under
 	// a new pk, which is not supported in P0.
 	errRenameUnsupported = "ERR RENAME/RENAMENX is not supported"
+
+	// errFlushDisabled rejects FLUSHALL / FLUSHDB. Real Redis flushes the keyspace
+	// and replies "+OK"; on this proxy that would mean wiping the whole shared
+	// DynamoDB table, so the command is declined with a descriptive error rather
+	// than silently performing (or silently downgrading) a destructive full flush.
+	errFlushDisabled = "ERR FLUSHALL/FLUSHDB is disabled on this proxy (would wipe the whole DynamoDB table)"
 )
 
 // handleKeys implements KEYS pattern (requirement 10.9). This proxy treats KEYS
@@ -98,6 +110,14 @@ func (r *Router) handleKeys(_ context.Context, c *server.Conn, _ [][]byte) {
 // wrong-number-of-arguments reply (requirement 3.2) before this rejection.
 func (r *Router) handleRename(_ context.Context, c *server.Conn, _ [][]byte) {
 	resp.NewWriter(c.Redcon()).Error(errRenameUnsupported)
+}
+
+// handleFlush rejects FLUSHALL / FLUSHDB. Registered (arity 1) so these
+// destructive full-flush commands get a first-class proxy rejection instead of
+// the generic unknown-command reply; a bare-vs-argument mismatch still yields the
+// standard wrong-number-of-arguments error first.
+func (r *Router) handleFlush(_ context.Context, c *server.Conn, _ [][]byte) {
+	resp.NewWriter(c.Redcon()).Error(errFlushDisabled)
 }
 
 // handleDel implements DEL key [key ...] (requirement 10.1). For each key it

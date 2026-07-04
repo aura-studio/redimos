@@ -164,8 +164,6 @@ func TestUnsupportedCommandsAreErrorRepliesNotDowngrade(t *testing.T) {
 		"PFADD":     "hll a",       // 4.6 HyperLogLog
 		"GEOADD":    "geo 13 38 m", // 4.6 GEO
 		"XADD":      "s * f v",     // 4.6 Streams
-		"FLUSHALL":  "",            // 4.7 flush
-		"FLUSHDB":   "",            // 4.7 flush
 	}
 
 	for name, args := range perFamily {
@@ -179,6 +177,19 @@ func TestUnsupportedCommandsAreErrorRepliesNotDowngrade(t *testing.T) {
 		}
 		if want := "-" + resp.ErrUnknownCommand(name); got != want {
 			t.Errorf("%q = %q, want %q", line, got, want)
+		}
+	}
+}
+
+// TestFlushRejected verifies FLUSHALL / FLUSHDB are declined with a first-class
+// proxy rejection (not the generic unknown-command reply and never a silent
+// "+OK"): flushing would wipe the whole shared DynamoDB table.
+func TestFlushRejected(t *testing.T) {
+	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
+	for _, cmd := range []string{"FLUSHALL", "FLUSHDB"} {
+		got := sendRead(t, conn, r, cmd)
+		if want := "-" + errFlushDisabled; got != want {
+			t.Errorf("%s = %q, want %q", cmd, got, want)
 		}
 	}
 }

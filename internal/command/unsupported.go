@@ -81,6 +81,8 @@ var UnsupportedCommands = []string{
 	// Streams (requirement 4.6).
 	"XADD", "XLEN", "XRANGE", "XREVRANGE", "XREAD", "XDEL", "XTRIM", "XINFO",
 
-	// Whole-DB flush, declined in P0 (requirement 4.7).
-	"FLUSHALL", "FLUSHDB",
+	// NOTE: FLUSHALL / FLUSHDB are NOT here — they are registered with a
+	// first-class proxy rejection (handleFlush / errFlushDisabled in keys.go)
+	// rather than the generic unknown-command path, so they must not be listed as
+	// unregistered.
 }
