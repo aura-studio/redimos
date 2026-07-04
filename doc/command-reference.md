@@ -11,8 +11,8 @@
 | **经 redimo** | 102 | 数据/键状态读写，真正打 DynamoDB |
 | 桩 | 7 | 固定/内存态回答（如 DBSIZE→`:0`），不碰键空间 |
 | 连接 | 4 | 仅连接状态（AUTH/SELECT/PING/ECHO） |
-| 代理拒绝 | 3 | 定制拒绝（KEYS/RENAME） |
-| 不支持 | 58 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
+| 代理拒绝 | 5 | 定制拒绝（KEYS/RENAME） |
+| 不支持 | 56 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
 | **合计** | 174 | 其中 102 需要 redimo |
 
 近期在 v1.4.0 新增并经 redimo 的命令（此前为「不支持」）：**MSETNX · SUBSTR · TOUCH · ZLEXCOUNT · ZREMRANGEBYLEX**。
@@ -151,17 +151,19 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `ping` | `tF` | 0 | 否 | — | 否 | 仅操作连接状态，不碰键空间 |
 | `select` | `lF` | 0 | 否 | — | 否 | 仅操作连接状态，不碰键空间 |
 
-## 不需要 redimo — 代理拒绝 — 3 条
+## 不需要 redimo — 代理拒绝 — 5 条
 
 定制拒绝：DynamoDB 表达代价过高。
 
 | 命令 | sflags | firstkey | 键空间 | 家族 | 走 redimo | 原因 |
 |---|---|---:|:---:|---|:---:|---|
+| `flushall` | `w` | 0 | 是 | — | 否 | 代理拒绝：会清空整个 DynamoDB 表（v1.5.1 起专属拒绝） |
+| `flushdb` | `w` | 0 | 是 | — | 否 | 代理拒绝：会清空整个 DynamoDB 表（v1.5.1 起专属拒绝） |
 | `keys` | `rS` | 0 | 是 | — | 否 | 代理拒绝：KEYS 无界全扫在 DynamoDB 上危险 |
 | `rename` | `w` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
 | `renamenx` | `wF` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
 
-## 不经 redimo — 未支持（未知命令） — 58 条
+## 不经 redimo — 未支持（未知命令） — 56 条
 
 是 Redis 数据命令，但 redimos 在命令层就短路，不发起存储调用。
 
@@ -184,8 +186,6 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `eval` | `s` | 0 | 否 | — | 否 | Lua 脚本：超范围 |
 | `evalsha` | `s` | 0 | 否 | — | 否 | Lua 脚本：超范围 |
 | `exec` | `sM` | 0 | 否 | — | 否 | 事务：超范围（无原子多命令） |
-| `flushall` | `w` | 0 | 是 | — | 否 | 全表清空：未支持 |
-| `flushdb` | `w` | 0 | 是 | — | 否 | 全表清空：未支持 |
 | `georadius_ro` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
 | `georadiusbymember_ro` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
 | `getbit` | `rF` | 1 | 是 | — | 否 | 位运算：超范围 |

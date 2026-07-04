@@ -13,7 +13,7 @@ zadd zscore zincrby zcard zcount zrange zrevrange zrangebyscore zrevrangebyscore
 scan'''.split())
 conn = set('auth ping echo quit select'.split())
 stub = set('command info dbsize config client slowlog time'.split())
-reject = set('keys rename renamenx'.split())
+reject = set('keys rename renamenx flushall flushdb'.split())
 pubsub = set('subscribe unsubscribe psubscribe punsubscribe publish pubsub'.split())
 script = set('eval evalsha script'.split())
 txn = set('multi exec discard watch unwatch'.split())
@@ -74,7 +74,12 @@ for n, ar, s, fk in rows:
         reason = '服务器自省，固定/内存态回答' + ('；键计数用 :0 桩不扫表' if n == 'dbsize' else '')
     elif n in reject:
         disp, need = 'proxy-reject', '否'
-        reason = '代理拒绝：' + ('KEYS 无界全扫在 DynamoDB 上危险' if n == 'keys' else 'RENAME 需整集合搬迁，代价过高')
+        if n == 'keys':
+            reason = '代理拒绝：KEYS 无界全扫在 DynamoDB 上危险'
+        elif n in ('flushall', 'flushdb'):
+            reason = '代理拒绝：会清空整个 DynamoDB 表（v1.5.1 起专属拒绝）'
+        else:
+            reason = '代理拒绝：RENAME 需整集合搬迁，代价过高'
     elif n in pubsub:
         disp, need, reason = 'unsupported', '否', '发布订阅：控制面，超范围'
     elif n in script:
