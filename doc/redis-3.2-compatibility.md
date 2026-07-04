@@ -55,6 +55,8 @@
 | redimos **v1.19.0** | **移除内置 Pika 迁移子系统**（`internal/migrate`：dual-write / shadow-read / fallback / importer + `--dual-write`/`--pika-addr`/`--shadow-read`/`--fallback`/`--migrate-prefixes` 等 flag）。该子系统此前仅在 main.go 构造并打日志、**从未接入读写请求路径**（router 拿的是裸 store），属死脚手架；迁移改用外部 pika-migrate 工具，与本项目无关，故清除 |
 | redimo **v2.1.0** | **结构一致性清理（未上线，破坏性）**：删 streams.go/geo.go(S2)/composite.go（~1750 行）+ 裁 `golang/geo`/`geohash`/`oklog/ulid` 依赖；去掉 set 成员的随机 skN（纯死写、污染 LSI、使 SADD 属性层非幂等）；list 元素改二进制容忍（`valueBytes`,去掉会 panic 的 `e.(StringValue)` 断言）+ index skN 由 float 格式改 int 格式（与 ParseInt 读路径一致）；修 `CreateProvisionedTable` 成功误报 nil-`%w` bug。redimo 全测试绿 |
 | redimos **v1.20.0** | 升 redimo v2.1.0（list 元素改传 `BytesValue`,与 string/hash 统一）；**新增内置集成测试 `test/integration/`**：差分一致性(74 命令 vs 3.2 逐字节)/命令原子性(SETNX 恰好一个赢家 + INCR 计数==已确认)/全字符集(256 字节全类型往返),见 §10.1 |
+| redimo **v2.2.0** | **List 结构收敛**:把头/尾 index 计数器从独立 `_redimo/<key>` 分区折进 list 自己的 `#meta` 项(保留属性 `il`/`ir`,原子 `ADD`+`RETURN UPDATED_NEW`)。**至此每种类型都是"单分区(data+#meta)"**,删 list 不再留孤儿分区。顺带修 `lLen` 既有 off-by-one(改走 skN LSI 计数,结构性排除 `#meta`)。redimo 全测试绿(含并发 list) |
+| redimos **v1.21.0** | 升 redimo v2.2.0（纯依赖升级,list index 机制全在 redimo 内部,redimos 侧零改动）；集成测试 + list 头尾顺序/删后重建 差分复验全绿 |
 
 ---
 
