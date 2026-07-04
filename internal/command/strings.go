@@ -223,14 +223,43 @@ func (r *Router) handleSet(ctx context.Context, c *server.Conn, args [][]byte) {
 
 	pk := encodePK(c.DB(), key)
 
-	// NX/XX gate on logical existence before any write (see file header).
-	if o.nx || o.xx {
+	// SET NX: atomically claim a logically-absent (or expired) key. The single
+	// conditional meta write is the concurrency-safe gate — racing SET NX callers
+	// can never both win. The claim resets the meta and clears any stale expiry, so
+	// only the value and (optional) new expiry remain to be written.
+	if o.nx {
+		created, err := r.Storage.Meta.CreateTypeIfAbsent(ctx, pk, meta.TypeString, 0, r.now())
+		if err != nil {
+			r.writeStoreError(c, err)
+			return
+		}
+		if !created {
+			w.NullBulk()
+			return
+		}
+		if err := r.Storage.Store.SetString(ctx, pk, val); err != nil {
+			r.writeStoreError(c, err)
+			return
+		}
+		if o.expSet {
+			if _, err := r.Storage.Meta.SetExpire(ctx, pk, o.expEpoch); err != nil {
+				r.writeStoreError(c, err)
+				return
+			}
+		}
+		w.SimpleString("OK")
+		return
+	}
+
+	// XX gate on logical existence before any write (see file header). Plain SET
+	// (no flag) falls straight through and overwrites any existing key/type.
+	if o.xx {
 		live, err := r.keyLive(ctx, pk)
 		if err != nil {
 			r.writeStoreError(c, err)
 			return
 		}
-		if (o.nx && live) || (o.xx && !live) {
+		if !live {
 			w.NullBulk()
 			return
 		}
@@ -276,18 +305,17 @@ func (r *Router) handleSetNX(ctx context.Context, c *server.Conn, args [][]byte)
 
 	pk := encodePK(c.DB(), key)
 
-	live, err := r.keyLive(ctx, pk)
+	// Atomically claim the key only if it is logically absent (or expired). This
+	// single conditional meta write replaces a read-then-write existence check, so
+	// two SETNX racing on the same fresh key can no longer both report success:
+	// exactly one observes created=true.
+	created, err := r.Storage.Meta.CreateTypeIfAbsent(ctx, pk, meta.TypeString, 0, r.now())
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
-	if live {
+	if !created {
 		w.Int(0)
-		return
-	}
-
-	if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
-		r.writeStoreError(c, err)
 		return
 	}
 	if err := r.Storage.Store.SetString(ctx, pk, val); err != nil {

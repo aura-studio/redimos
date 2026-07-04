@@ -86,6 +86,15 @@ func (s *prop1Store) EnsureType(_ context.Context, pk, expected string, cntDelta
 	return nil
 }
 
+func (s *prop1Store) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
+	e := s.items[pk]
+	if e == nil || !e.exists {
+		s.items[pk] = &prop1Entry{exists: true, typ: expected, cnt: cntDelta}
+		return true, nil
+	}
+	return false, nil
+}
+
 func (s *prop1Store) LoadMeta(_ context.Context, pk string) (storage.Meta, bool, error) {
 	e := s.items[pk]
 	if e == nil || !e.exists {

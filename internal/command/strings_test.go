@@ -78,6 +78,18 @@ func (s *fakeStringStore) EnsureType(_ context.Context, pk, expected string, cnt
 	return nil
 }
 
+func (s *fakeStringStore) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
+	m := s.metas[pk]
+	live := s.live[pk] && !(m.Exp > 0 && m.Exp <= nowEpoch)
+	if live {
+		return false, nil
+	}
+	// Claim: reset the meta (count assigned, not added; expiry cleared).
+	s.metas[pk] = storage.Meta{Type: expected, Count: cntDelta}
+	s.live[pk] = true
+	return true, nil
+}
+
 func (s *fakeStringStore) LoadMeta(_ context.Context, pk string) (storage.Meta, bool, error) {
 	if !s.live[pk] {
 		return storage.Meta{}, false, nil

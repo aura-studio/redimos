@@ -118,6 +118,11 @@ func (t *throttleStore) EnsureType(ctx context.Context, pk, expected string, cnt
 	return t.obs(t.inner.EnsureType(ctx, pk, expected, cntDelta))
 }
 
+func (t *throttleStore) CreateTypeIfAbsent(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
+	created, err := t.inner.CreateTypeIfAbsent(ctx, pk, expected, cntDelta, nowEpoch)
+	return created, t.obs(err)
+}
+
 func (t *throttleStore) LoadMeta(ctx context.Context, pk string) (Meta, bool, error) {
 	m, found, err := t.inner.LoadMeta(ctx, pk)
 	return m, found, t.obs(err)

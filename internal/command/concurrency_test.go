@@ -64,6 +64,12 @@ func (s *syncStore) EnsureType(ctx context.Context, pk, expected string, cntDelt
 	return s.inner.EnsureType(ctx, pk, expected, cntDelta)
 }
 
+func (s *syncStore) CreateTypeIfAbsent(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.CreateTypeIfAbsent(ctx, pk, expected, cntDelta, nowEpoch)
+}
+
 func (s *syncStore) LoadMeta(ctx context.Context, pk string) (storage.Meta, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -103,6 +103,16 @@ func (m *MetaStore) EnsureType(ctx context.Context, pk string, expected KeyType,
 	return err
 }
 
+// CreateTypeIfAbsent atomically claims a logically-absent key (no meta item, or one
+// already expired relative to nowEpoch) with the given type, in a single conditional
+// meta write. It is the concurrency-safe gate for SETNX / SET NX: created is true
+// only for the one caller that wins the race; a live key of any type yields
+// created=false (not ErrWrongType — SETNX never reports a type error). On a claim the
+// count is reset to cntDelta and any stale expiry cleared.
+func (m *MetaStore) CreateTypeIfAbsent(ctx context.Context, pk string, expected KeyType, cntDelta, nowEpoch int64) (created bool, err error) {
+	return m.store.CreateTypeIfAbsent(ctx, pk, string(expected), cntDelta, nowEpoch)
+}
+
 // Load reads the meta item for pk. found is false when the key is logically
 // absent. Callers combine this with IsExpired to enforce expiry on the read path.
 func (m *MetaStore) Load(ctx context.Context, pk string) (Meta, bool, error) {

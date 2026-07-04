@@ -148,6 +148,16 @@ type Store interface {
 	// (SetStringIfEquals) this needs no compare-and-set retry.
 	EnsureType(ctx context.Context, pk, expected string, cntDelta int64) error
 
+	// CreateTypeIfAbsent atomically establishes the meta item for pk with the given
+	// type ONLY IF the key is logically absent — no meta item, or a meta item that
+	// is already expired relative to nowEpoch. It is the concurrency-safe gate for
+	// SETNX / SET NX: a single conditional meta write claims the key, so racing
+	// callers can never both win. created is false (no error) when the key is live
+	// (of any type); the caller replies :0 / null without writing a value. On a
+	// successful claim the count is reset to cntDelta (not added) and any stale
+	// expiry is cleared.
+	CreateTypeIfAbsent(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (created bool, err error)
+
 	// LoadMeta reads the meta item for pk. found is false when the key is logically
 	// absent (no meta item).
 	LoadMeta(ctx context.Context, pk string) (meta Meta, found bool, err error)
@@ -792,6 +802,14 @@ func (s *redimoStore) EnsureType(_ context.Context, pk, expected string, cntDelt
 	}
 
 	return err
+}
+
+func (s *redimoStore) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
+	// ctx is accepted by the seam but not yet threaded down: redimo uses
+	// context.TODO() internally. The single conditional meta write claims a
+	// logically-absent (or expired) key atomically; created=false means the key is
+	// live, which is not an error for SETNX.
+	return s.client.CreateTypeIfAbsent(pk, redimo.KeyType(expected), cntDelta, nowEpoch)
 }
 
 func (s *redimoStore) LoadMeta(_ context.Context, pk string) (Meta, bool, error) {

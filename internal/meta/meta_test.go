@@ -49,6 +49,10 @@ func (f *fakeStore) EnsureType(_ context.Context, pk, expected string, cntDelta 
 	return f.ensureErr
 }
 
+func (f *fakeStore) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
+	return true, f.ensureErr
+}
+
 func (f *fakeStore) LoadMeta(_ context.Context, _ string) (storage.Meta, bool, error) {
 	return f.loadMeta, f.loadFound, f.loadErr
 }

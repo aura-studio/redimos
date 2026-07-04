@@ -46,6 +46,11 @@ var _ storage.Store = prop2Store{}
 
 func (prop2Store) EnsureType(context.Context, string, string, int64) error { return nil }
 
+func (s prop2Store) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
+	// The key's meta always exists; it is claimable only when already expired.
+	return s.exp > 0 && s.exp <= nowEpoch, nil
+}
+
 func (s prop2Store) LoadMeta(context.Context, string) (storage.Meta, bool, error) {
 	// The key's meta always exists; only exp varies. Type/Count are fixed since the
 	// property is about expiry, not type or counting.

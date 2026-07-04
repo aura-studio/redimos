@@ -102,6 +102,19 @@ func (s *lazyStore) EnsureType(_ context.Context, pk, expected string, cntDelta 
 	return nil
 }
 
+func (s *lazyStore) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	m, ok := s.metas[pk]
+	live := ok && !(m.Exp > 0 && m.Exp <= nowEpoch)
+	if live {
+		return false, nil
+	}
+	s.metas[pk] = storage.Meta{Type: expected, Count: cntDelta}
+	return true, nil
+}
+
 func (s *lazyStore) LoadMeta(_ context.Context, pk string) (storage.Meta, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
