@@ -8,16 +8,16 @@
 
 | 处置 | 数量 | 说明 |
 |---|---:|---|
-| **经 redimo** | 96 | 数据/键状态读写，真正打 DynamoDB |
+| **经 redimo** | 102 | 数据/键状态读写，真正打 DynamoDB |
 | 桩 | 7 | 固定/内存态回答（如 DBSIZE→`:0`），不碰键空间 |
 | 连接 | 4 | 仅连接状态（AUTH/SELECT/PING/ECHO） |
 | 代理拒绝 | 3 | 定制拒绝（KEYS/RENAME） |
-| 不支持 | 64 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
-| **合计** | 174 | 其中 96 需要 redimo |
+| 不支持 | 58 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
+| **合计** | 174 | 其中 102 需要 redimo |
 
 近期在 v1.4.0 新增并经 redimo 的命令（此前为「不支持」）：**MSETNX · SUBSTR · TOUCH · ZLEXCOUNT · ZREMRANGEBYLEX**。
 
-## 需要 redimo（数据面，经存储层） — 96 条
+## 需要 redimo（数据面，经存储层） — 102 条
 
 数据与键的元信息（类型/TTL/计数）都存在 DynamoDB，这些命令必须读/写它。
 
@@ -119,6 +119,12 @@
 | `zscore` | `rF` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
 | `zunionstore` | `wm` | 0 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
 | `scan` | `rR` | 0 | 是 | scan | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `geoadd` | `wm` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
+| `geodist` | `r` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
+| `geohash` | `r` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
+| `geopos` | `r` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
+| `georadius` | `w` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
+| `georadiusbymember` | `w` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
 
 ## 不需要 redimo — 桩 — 7 条
 
@@ -155,7 +161,7 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `rename` | `w` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
 | `renamenx` | `wF` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
 
-## 不经 redimo — 未支持（未知命令） — 64 条
+## 不经 redimo — 未支持（未知命令） — 58 条
 
 是 Redis 数据命令，但 redimos 在命令层就短路，不发起存储调用。
 
@@ -180,13 +186,7 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `exec` | `sM` | 0 | 否 | — | 否 | 事务：超范围（无原子多命令） |
 | `flushall` | `w` | 0 | 是 | — | 否 | 全表清空：未支持 |
 | `flushdb` | `w` | 0 | 是 | — | 否 | 全表清空：未支持 |
-| `geoadd` | `wm` | 1 | 是 | — | 否 | GEO：超范围 |
-| `geodist` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
-| `geohash` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
-| `geopos` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
-| `georadius` | `w` | 1 | 是 | — | 否 | GEO：超范围 |
 | `georadius_ro` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
-| `georadiusbymember` | `w` | 1 | 是 | — | 否 | GEO：超范围 |
 | `georadiusbymember_ro` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
 | `getbit` | `rF` | 1 | 是 | — | 否 | 位运算：超范围 |
 | `lastsave` | `RF` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |

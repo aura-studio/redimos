@@ -20,14 +20,18 @@ txn = set('multi exec discard watch unwatch'.split())
 admin = set('bgrewriteaof bgsave save lastsave shutdown slaveof replconf asking readonly readwrite wait pfselftest debug monitor cluster latency role sync psync'.split())
 bit = set('setbit getbit bitcount bitop bitpos bitfield'.split())
 hll = set('pfadd pfcount pfmerge pfdebug'.split())
-geo = set('geoadd geodist geopos geohash georadius georadiusbymember georadius_ro georadiusbymember_ro'.split())
+# The 6 base GEO commands are implemented (v1.5.0); the read-only _ro variants
+# (Redis 3.2.10+) are not registered.
+geonew = set('geoadd geodist geopos geohash georadius georadiusbymember'.split())
+geo = set('georadius_ro georadiusbymember_ro'.split())
 block = set('blpop brpop brpoplpush'.split())
 flush = set('flushall flushdb'.split())
 keymgmt = set('move migrate dump restore restore-asking randomkey object sort'.split())
-# Newly implemented (v1.4.0) — now served via redimo. Kept as a named set so the
-# table can badge them as recently added.
-newly = set('msetnx substr touch zlexcount zremrangebylex'.split())
-via = via | newly
+# Newly implemented — now served via redimo. Kept as named sets so the table can
+# badge them as recently added.
+newly = set('msetnx substr touch zlexcount zremrangebylex'.split())  # v1.4.0
+newly_geo = geonew  # v1.5.0
+via = via | newly | newly_geo
 notimpl = set()
 
 listcmds = set('lpush rpush lpushx rpushx lpop rpop llen lrange lindex lset linsert lrem ltrim rpoplpush'.split())
@@ -35,6 +39,8 @@ keyexp = set('del exists expire expireat pexpire pexpireat ttl pttl persist type
 
 def fam(n):
     if n in via or n in notimpl:
+        if n in ('geoadd','geodist','geopos','geohash','georadius','georadiusbymember'):
+            return 'geo'
         if n[0] == 'h':
             return 'hash'
         if n in listcmds:
@@ -55,7 +61,12 @@ for n, ar, s, fk in rows:
     keyspace = ('w' in s) or ('r' in s)
     if n in via:
         disp, need = 'via-redimo', '是'
-        reason = '✓ 新增 v1.4.0 → 经 redimo' if n in newly else '数据/键状态读写 → 经 redimo 映射到 DynamoDB'
+        if n in newly_geo:
+            reason = '✓ 新增 v1.5.0 → 经 redimo（GEO，功能版）'
+        elif n in newly:
+            reason = '✓ 新增 v1.4.0 → 经 redimo'
+        else:
+            reason = '数据/键状态读写 → 经 redimo 映射到 DynamoDB'
     elif n in conn:
         disp, need, reason = 'connection', '否', '仅操作连接状态，不碰键空间'
     elif n in stub:
