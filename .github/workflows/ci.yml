@@ -22,7 +22,7 @@ env:
   # Update this together with the redimo version required in the redimos go.mod
   # whenever the fork is intentionally bumped.
   REDIMO_REPO: aura-studio/redimo
-  REDIMO_REF: a59213c942f31f71908da333e9b09e5b1bcf6c8b
+  REDIMO_REF: 8f08e1b90321b403874cbf1846a271ffed59df62
 
 jobs:
   redimo-fork-regression:

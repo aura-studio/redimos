@@ -48,6 +48,9 @@
 | redimos **v1.13.0** | **READWRITE**（READONLY 的反向，清除只读标志）、**REPLCONF**（master↔replica 复制子协议）→ 代理拒绝。注：REPLCONF 属 §11「架构上不可能实现」档，但仍**注册专属拒绝**而非落未知命令——处置(拒绝) 与 可实现性(不可能) 是两码事。代理拒绝 27 / 不支持 23 |
 | redimos **v1.14.0** | **RANDOMKEY / MOVE / SORT / OBJECT / MONITOR / CLUSTER / LATENCY / DEBUG** → 代理拒绝（各带专属消息）。至此 §11「宜代理拒绝」桶 12 条**全部落地**。代理拒绝 35 / 不支持 15 |
 | redimos **v1.15.0** | **7 个固定回复桩**（`SAVE`→+OK / `BGSAVE` / `BGREWRITEAOF` / `LASTSAVE`→当前秒 / `ROLE`→master 形态 / `WAIT`→:0 / `PFSELFTEST`→+OK，实测与 3.2 稳态一致）+ **实现 `PFDEBUG`**（GETREG/ENCODING/TODENSE/DECODE；**GETREG 实测字节兼容**：N=20 稀疏、N=5000 稠密两端 md5 一致）。经 redimo 114 / 桩 14 / 不支持仅剩 7（全是架构不可能项） |
+| redimos **v1.16.0** | **内部 pk 前缀统一为 `{n}:`**（db0=`0:`、db1=`1:`、…，去掉旧的 db0=`0:`/dbN=`d{n}:` 不对称）；纯内部、Redis 协议不可见、无碰撞、对迁移零影响 |
+| redimo **v2.0.3** | **修复 SCAN**：`ScanMetaKeys` 的过滤把排序键 `#sk = :meta` 当 String 比，但 sk 自 v2.0.1 起是 Binary，导致真实 DynamoDB 上 **SCAN 恒空**（GET 等不受影响）。改用 Binary `encodeSK(MetaSK)` 匹配 |
+| redimos **v1.17.0** | 升级 redimo v2.0.3，**SCAN 现在能用了**（实测真 DynamoDB：db0 与多 db 均正确按库返回 + MATCH 过滤）。KEYS 代理拒绝时提示的「用 SCAN」至此名副其实 |
 
 ---
 
