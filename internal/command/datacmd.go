@@ -19,30 +19,24 @@ import (
 // encoding, existence check and error mapping.
 
 // encodePK encodes a logical key into its DynamoDB partition key for the given
-// selected database. Per the design's data model the pk is "{db}:{key}": db 0
-// (the P0 default) uses the fixed "0:" prefix, and a non-zero db selected via
-// SELECT maps to the "d{n}:" prefix (requirement 2.9). The key bytes are appended
-// verbatim so binary-safe key names round-trip.
+// selected database. The pk is "{db}:{key}" — the decimal db index, a ':', then the
+// key bytes verbatim (so binary-safe key names round-trip). The uniform "{n}:"
+// prefix (db 0 -> "0:", db 1 -> "1:", ...) is collision-free: the ':' terminates the
+// number, so one db's prefix is never a prefix of another's ("1:" is not a prefix of
+// "12:"), and a db-0 key that happens to look like "1:foo" encodes to "0:1:foo",
+// distinct from db-1's "1:foo".
 func encodePK(db int, key []byte) string {
-	if db == 0 {
-		return "0:" + string(key)
-	}
-
-	return "d" + strconv.Itoa(db) + ":" + string(key)
+	return strconv.Itoa(db) + ":" + string(key)
 }
 
 // decodePK reverses encodePK: it strips the "{db}:" partition-key prefix for the
 // selected database, returning the logical key name and ok=true when pk belongs to
 // that database. A pk that does not carry the expected prefix (i.e. it belongs to a
 // different database) returns ok=false so SCAN can filter the keyspace to the
-// connection's selected db. Like encodePK, db 0 uses the "0:" prefix and any
-// non-zero db uses "d{n}:". The key bytes after the prefix are returned verbatim so
+// connection's selected db. The key bytes after the prefix are returned verbatim so
 // binary-safe key names — including names that themselves contain ':' — round-trip.
 func decodePK(db int, pk string) (string, bool) {
-	prefix := "0:"
-	if db != 0 {
-		prefix = "d" + strconv.Itoa(db) + ":"
-	}
+	prefix := strconv.Itoa(db) + ":"
 
 	if !strings.HasPrefix(pk, prefix) {
 		return "", false

@@ -652,7 +652,7 @@ func TestEncodePK(t *testing.T) {
 	if got, want := encodePK(0, []byte("foo")), "0:foo"; got != want {
 		t.Errorf("encodePK(0, foo) = %q, want %q", got, want)
 	}
-	if got, want := encodePK(3, []byte("foo")), "d3:foo"; got != want {
+	if got, want := encodePK(3, []byte("foo")), "3:foo"; got != want {
 		t.Errorf("encodePK(3, foo) = %q, want %q", got, want)
 	}
 }

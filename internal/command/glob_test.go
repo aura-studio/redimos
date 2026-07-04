@@ -75,7 +75,8 @@ func TestGlobMatch(t *testing.T) {
 	}
 }
 
-// TestDecodePK verifies decodePK reverses encodePK and filters by database.
+// TestDecodePK verifies decodePK reverses encodePK under the uniform "{n}:" scheme
+// and filters by database, including the collision-safety edge cases.
 func TestDecodePK(t *testing.T) {
 	// db 0 uses the "0:" prefix.
 	if k, ok := decodePK(0, "0:foo"); !ok || k != "foo" {
@@ -85,15 +86,31 @@ func TestDecodePK(t *testing.T) {
 	if k, ok := decodePK(0, "0:a:b:c"); !ok || k != "a:b:c" {
 		t.Errorf("decodePK(0, \"0:a:b:c\") = (%q, %v), want (\"a:b:c\", true)", k, ok)
 	}
-	// db 3 uses the "d3:" prefix.
-	if k, ok := decodePK(3, "d3:bar"); !ok || k != "bar" {
-		t.Errorf("decodePK(3, \"d3:bar\") = (%q, %v), want (\"bar\", true)", k, ok)
+	// db 3 uses the "3:" prefix.
+	if k, ok := decodePK(3, "3:bar"); !ok || k != "bar" {
+		t.Errorf("decodePK(3, \"3:bar\") = (%q, %v), want (\"bar\", true)", k, ok)
 	}
 	// A pk from a different database is filtered out.
-	if _, ok := decodePK(0, "d3:bar"); ok {
-		t.Error("decodePK(0, \"d3:bar\") should report ok=false (different db)")
+	if _, ok := decodePK(0, "3:bar"); ok {
+		t.Error("decodePK(0, \"3:bar\") should report ok=false (different db)")
 	}
 	if _, ok := decodePK(3, "0:foo"); ok {
 		t.Error("decodePK(3, \"0:foo\") should report ok=false (different db)")
+	}
+	// Collision-safety: "1:" is not a prefix of "12:" (the ':' terminates the db
+	// number), so db 1 does not swallow db 12's keys and vice versa.
+	if _, ok := decodePK(1, encodePK(12, []byte("x"))); ok {
+		t.Error("decodePK(1, encodePK(12, \"x\")) should report ok=false")
+	}
+	if _, ok := decodePK(12, encodePK(1, []byte("x"))); ok {
+		t.Error("decodePK(12, encodePK(1, \"x\")) should report ok=false")
+	}
+	// A db-0 key that itself looks like a db-1 prefix ("1:foo") stays distinct from
+	// db 1's real "foo": encodePK(0,"1:foo") = "0:1:foo" != encodePK(1,"foo") = "1:foo".
+	if k, ok := decodePK(0, encodePK(0, []byte("1:foo"))); !ok || k != "1:foo" {
+		t.Errorf("db-0 key \"1:foo\" round-trip = (%q, %v), want (\"1:foo\", true)", k, ok)
+	}
+	if _, ok := decodePK(1, encodePK(0, []byte("1:foo"))); ok {
+		t.Error("decodePK(1, encodePK(0, \"1:foo\")) should report ok=false")
 	}
 }
