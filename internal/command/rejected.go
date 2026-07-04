@@ -56,6 +56,17 @@ const (
 	// replicates instead of redirecting to its master — inapplicable on a
 	// non-cluster proxy that has no replicas, slots, or replica read role.
 	errReadOnlyUnsupported = "ERR READONLY is not supported on this proxy (Redis Cluster replica reads do not apply)"
+
+	// errReadWriteUnsupported rejects READWRITE, the inverse of READONLY: it clears
+	// the Redis Cluster replica read-only flag. With no cluster/replica state to
+	// reset, it is equally inapplicable on this proxy.
+	errReadWriteUnsupported = "ERR READWRITE is not supported on this proxy (Redis Cluster replica reads do not apply)"
+
+	// errReplconfUnsupported rejects REPLCONF, the internal master<->replica
+	// replication sub-protocol (listening-port/capa negotiation and ACK <offset>
+	// heartbeats). It is meaningless without an active replication link and a
+	// maintained replication offset, neither of which a stateless proxy has.
+	errReplconfUnsupported = "ERR REPLCONF is not supported on this proxy (replication sub-protocol; no master/replica link exists)"
 )
 
 // registerRejected registers the deliberately-declined-but-real Redis 3.2 families
@@ -93,6 +104,8 @@ func (r *Router) registerRejected() {
 	r.registerReject("SHUTDOWN", -1, errShutdownUnsupported)
 	r.registerReject("ASKING", 1, errAskingUnsupported)
 	r.registerReject("READONLY", 1, errReadOnlyUnsupported)
+	r.registerReject("READWRITE", 1, errReadWriteUnsupported)
+	r.registerReject("REPLCONF", -1, errReplconfUnsupported)
 }
 
 // registerReject registers a single command as a first-class proxy rejection: the

@@ -123,6 +123,9 @@ func TestRejectedFamiliesReturnDedicatedError(t *testing.T) {
 		{"SHUTDOWN NOSAVE", errShutdownUnsupported},
 		{"ASKING", errAskingUnsupported},
 		{"READONLY", errReadOnlyUnsupported},
+		{"READWRITE", errReadWriteUnsupported},
+		{"REPLCONF", errReplconfUnsupported},
+		{"REPLCONF GETACK *", errReplconfUnsupported},
 	}
 
 	for _, tc := range cases {
@@ -144,7 +147,7 @@ func TestRejectedFamiliesRegistered(t *testing.T) {
 		"EVAL", "EVALSHA", "SCRIPT",
 		"MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH",
 		"BLPOP", "BRPOP", "BRPOPLPUSH",
-		"SHUTDOWN", "ASKING", "READONLY",
+		"SHUTDOWN", "ASKING", "READONLY", "READWRITE", "REPLCONF",
 	} {
 		if _, ok := r.Table.Lookup(name); !ok {
 			t.Errorf("reject family command %q is not registered; it would fall through to unknown-command instead of the dedicated rejection", name)

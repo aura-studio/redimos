@@ -11,8 +11,8 @@
 | **经 redimo** | 113 | 数据/键状态读写，真正打 DynamoDB |
 | 桩 | 7 | 固定/内存态回答（如 DBSIZE→`:0`），不碰键空间 |
 | 连接 | 4 | 仅连接状态（AUTH/SELECT/PING/ECHO） |
-| 代理拒绝 | 25 | 定制拒绝（KEYS/RENAME） |
-| 不支持 | 25 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
+| 代理拒绝 | 27 | 定制拒绝（KEYS/RENAME） |
+| 不支持 | 23 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
 | **合计** | 174 | 其中 113 需要 redimo |
 
 近期在 v1.4.0 新增并经 redimo 的命令（此前为「不支持」）：**MSETNX · SUBSTR · TOUCH · ZLEXCOUNT · ZREMRANGEBYLEX**。
@@ -162,7 +162,7 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `ping` | `tF` | 0 | 否 | — | 否 | 仅操作连接状态，不碰键空间 |
 | `select` | `lF` | 0 | 否 | — | 否 | 仅操作连接状态，不碰键空间 |
 
-## 不需要 redimo — 代理拒绝 — 25 条
+## 不需要 redimo — 代理拒绝 — 27 条
 
 定制拒绝：DynamoDB 表达代价过高。
 
@@ -185,8 +185,10 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `pubsub` | `pltR` | 0 | 否 | — | 否 | 代理拒绝：发布订阅需连接级订阅+跨连接 fan-out，无状态代理不适合（v1.10.0 起专属拒绝） |
 | `punsubscribe` | `pslt` | 0 | 否 | — | 否 | 代理拒绝：发布订阅需连接级订阅+跨连接 fan-out，无状态代理不适合（v1.10.0 起专属拒绝） |
 | `readonly` | `F` | 0 | 否 | — | 否 | 代理拒绝：Redis Cluster replica 只读服务开关，非 cluster 代理无 replica/slot 可切换（v1.12.0 起专属拒绝） |
+| `readwrite` | `F` | 0 | 否 | — | 否 | 代理拒绝：清除 Cluster replica 只读标志（READONLY 的反向），无 cluster/replica 状态可复位（v1.13.0 起专属拒绝） |
 | `rename` | `w` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
 | `renamenx` | `wF` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
+| `replconf` | `aslt` | 0 | 否 | — | 否 | 代理拒绝：master↔replica 复制子协议（端口/capa 协商 + ACK offset 心跳），无复制链路/offset（v1.13.0 起专属拒绝） |
 | `script` | `s` | 0 | 否 | — | 否 | 代理拒绝：Lua 脚本需内嵌解释器（v1.10.0 起专属拒绝） |
 | `shutdown` | `alt` | 0 | 否 | — | 否 | 代理拒绝：会终止所有租户共享的进程，且无 RDB 可先落盘（v1.11.0 起专属拒绝） |
 | `subscribe` | `pslt` | 0 | 否 | — | 否 | 代理拒绝：发布订阅需连接级订阅+跨连接 fan-out，无状态代理不适合（v1.10.0 起专属拒绝） |
@@ -194,7 +196,7 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `unwatch` | `sF` | 0 | 否 | — | 否 | 代理拒绝：事务需排队+原子应用多命令（v1.10.0 起专属拒绝） |
 | `watch` | `sF` | 1 | 否 | — | 否 | 代理拒绝：事务需排队+原子应用多命令（v1.10.0 起专属拒绝） |
 
-## 不经 redimo — 未支持（未知命令） — 25 条
+## 不经 redimo — 未支持（未知命令） — 23 条
 
 是 Redis 数据命令，但 redimos 在命令层就短路，不发起存储调用。
 
@@ -215,8 +217,6 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `pfselftest` | `a` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `psync` | `ars` | 0 | 是 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `randomkey` | `rR` | 0 | 是 | — | 否 | 键管理：DynamoDB 表达不了/代价过高 |
-| `readwrite` | `F` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
-| `replconf` | `aslt` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `restore` | `wm` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了/代价过高 |
 | `restore-asking` | `wmk` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了/代价过高 |
 | `role` | `lst` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
