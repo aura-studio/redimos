@@ -17,7 +17,13 @@ reject = set('keys rename renamenx flushall flushdb'.split())
 pubsub = set('subscribe unsubscribe psubscribe punsubscribe publish pubsub'.split())
 script = set('eval evalsha script'.split())
 txn = set('multi exec discard watch unwatch'.split())
-admin = set('bgrewriteaof bgsave save lastsave shutdown slaveof replconf asking readonly readwrite wait pfselftest debug monitor cluster latency role sync psync'.split())
+admin = set('bgrewriteaof bgsave save lastsave slaveof replconf readonly readwrite wait pfselftest debug monitor cluster latency role sync psync'.split())
+# Individual real-Redis-3.2 commands promoted from unsupported to proxy-reject as the
+# maintainer converts them one by one (each with its own dedicated message).
+reject_extra = {
+    'shutdown': '代理拒绝：会终止所有租户共享的进程，且无 RDB 可先落盘（v1.11.0 起专属拒绝）',
+    'asking':   '代理拒绝：Redis Cluster 槽迁移的一次性标志，非 cluster 单一 keyspace 代理无意义（v1.11.0 起专属拒绝）',
+}
 # BIT family implemented (v1.6.0), byte-compatible for single-key ops (BITOP is
 # multi-key non-atomic).
 bit_new = set('setbit getbit bitcount bitop bitpos bitfield'.split())
@@ -111,6 +117,8 @@ for n, ar, s, fk in rows:
         disp, need, reason = 'unsupported', '否', 'HyperLogLog：可经命令层实现，尚未做（同 BIT）'
     elif n in block:
         disp, need, reason = 'proxy-reject', '否', '代理拒绝：阻塞命令需长连接阻塞语义（改用非阻塞 LPOP/RPOP/RPOPLPUSH；v1.10.0 起专属拒绝）'
+    elif n in reject_extra:
+        disp, need, reason = 'proxy-reject', '否', reject_extra[n]
     elif n in flush:
         disp, need, reason = 'unsupported', '否', '全表清空：未支持'
     elif n in keymgmt:

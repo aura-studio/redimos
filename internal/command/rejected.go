@@ -40,6 +40,16 @@ const (
 	// connection blocked waiting for a push; clients should use the non-blocking
 	// variant (LPOP/RPOP/RPOPLPUSH).
 	errBlockingUnsupported = "ERR blocking commands are not supported on this proxy (use the non-blocking LPOP/RPOP/RPOPLPUSH)"
+
+	// errShutdownUnsupported rejects SHUTDOWN. The proxy process is shared by all
+	// tenants, so honouring it would terminate everyone's service; and there is no
+	// RDB to persist first (DynamoDB is already the durable store).
+	errShutdownUnsupported = "ERR SHUTDOWN is not supported on this proxy (it would terminate a process shared by all tenants)"
+
+	// errAskingUnsupported rejects ASKING. It is the one-shot flag a client sets
+	// after a Redis Cluster ASK redirect during slot migration — a mode this
+	// non-cluster, single-keyspace proxy never enters, so there is nothing to toggle.
+	errAskingUnsupported = "ERR ASKING is not supported on this proxy (Redis Cluster slot migration does not apply)"
 )
 
 // registerRejected registers the deliberately-declined-but-real Redis 3.2 families
@@ -71,6 +81,20 @@ func (r *Router) registerRejected() {
 	t.Register("BLPOP", -3, false, r.handleBlockingRejected)
 	t.Register("BRPOP", -3, false, r.handleBlockingRejected)
 	t.Register("BRPOPLPUSH", 4, false, r.handleBlockingRejected)
+
+	// Individual real-Redis-3.2 commands the proxy declines, each with its own
+	// message. Arities are the Redis 3.2 command-table values.
+	r.registerReject("SHUTDOWN", -1, errShutdownUnsupported)
+	r.registerReject("ASKING", 1, errAskingUnsupported)
+}
+
+// registerReject registers a single command as a first-class proxy rejection: the
+// command is recognised (so arity is checked and it does NOT fall through to the
+// unknown-command path) and any correctly-shaped call replies msg verbatim.
+func (r *Router) registerReject(name string, arity int, msg string) {
+	r.Table.Register(name, arity, false, func(_ context.Context, c *server.Conn, _ [][]byte) {
+		resp.NewWriter(c.Redcon()).Error(msg)
+	})
 }
 
 func (r *Router) handlePubSubRejected(_ context.Context, c *server.Conn, _ [][]byte) {
