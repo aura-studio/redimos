@@ -91,6 +91,14 @@ func TestDifferentialVsRedis32(t *testing.T) {
 	diff("LTRIM", bs("LTRIM"), l, bs("0"), bs("0"))
 	diff("LRANGE after trim", bs("LRANGE"), l, bs("0"), bs("-1"))
 
+	// LREM head-most selection must order occurrences by NUMERIC index, not the
+	// decimal-string index ("10" < "2"). With a duplicate at positions 2 and 11, a
+	// count=1 LREM must drop position 2, leaving the tail duplicate — matching Redis.
+	lr := k("lremnum")
+	diff("LREM num RPUSH", bs("RPUSH"), lr, bs("f1"), bs("DUP"), bs("f3"), bs("f4"), bs("f5"), bs("f6"), bs("f7"), bs("f8"), bs("f9"), bs("f10"), bs("DUP"))
+	diff("LREM num count=1", bs("LREM"), lr, bs("1"), bs("DUP"))
+	diff("LRANGE after LREM num", bs("LRANGE"), lr, bs("0"), bs("-1"))
+
 	// --- Sets (count/membership = deterministic; avoid unordered SMEMBERS) ---
 	st := k("set")
 	diff("SADD", bs("SADD"), st, bs("m1"), bs("m2"), bs("m3"))
@@ -116,6 +124,16 @@ func TestDifferentialVsRedis32(t *testing.T) {
 	diff("ZCOUNT", bs("ZCOUNT"), z, bs("2"), bs("10"))
 	diff("ZREM", bs("ZREM"), z, bs("b"))
 	diff("ZCARD after zrem", bs("ZCARD"), z)
+
+	// Lex range/count over an equal-score zset. The unbounded "- +" forms must not
+	// leak or count the internal #meta bookkeeping item (they must match Redis exactly).
+	zl := k("zlex")
+	diff("ZADD lex", bs("ZADD"), zl, bs("0"), bs("a"), bs("0"), bs("b"), bs("0"), bs("c"))
+	diff("ZRANGEBYLEX - +", bs("ZRANGEBYLEX"), zl, bs("-"), bs("+"))
+	diff("ZREVRANGEBYLEX + -", bs("ZREVRANGEBYLEX"), zl, bs("+"), bs("-"))
+	diff("ZRANGEBYLEX bounded", bs("ZRANGEBYLEX"), zl, bs("[a"), bs("(c"))
+	diff("ZLEXCOUNT - +", bs("ZLEXCOUNT"), zl, bs("-"), bs("+"))
+	diff("ZLEXCOUNT bounded", bs("ZLEXCOUNT"), zl, bs("[a"), bs("[b"))
 
 	// --- BIT / HLL (redimo-backed value ops) ---
 	diff("SETBIT", bs("SETBIT"), k("bit"), bs("7"), bs("1"))

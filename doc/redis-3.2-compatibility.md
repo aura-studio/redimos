@@ -57,6 +57,9 @@
 | redimos **v1.20.0** | 升 redimo v2.1.0（list 元素改传 `BytesValue`,与 string/hash 统一）；**新增内置集成测试 `test/integration/`**：差分一致性(74 命令 vs 3.2 逐字节)/命令原子性(SETNX 恰好一个赢家 + INCR 计数==已确认)/全字符集(256 字节全类型往返),见 §10.1 |
 | redimo **v2.2.0** | **List 结构收敛**:把头/尾 index 计数器从独立 `_redimo/<key>` 分区折进 list 自己的 `#meta` 项(保留属性 `il`/`ir`,原子 `ADD`+`RETURN UPDATED_NEW`)。**至此每种类型都是"单分区(data+#meta)"**,删 list 不再留孤儿分区。顺带修 `lLen` 既有 off-by-one(改走 skN LSI 计数,结构性排除 `#meta`)。redimo 全测试绿(含并发 list) |
 | redimos **v1.21.0** | 升 redimo v2.2.0（纯依赖升级,list index 机制全在 redimo 内部,redimos 侧零改动）；集成测试 + list 头尾顺序/删后重建 差分复验全绿 |
+| redimo **v2.3.0** | **`#meta` 专属排序键前缀（未上线,破坏性）**：保留项从"把字符串 `#meta` 走成员前缀 `0x01` 编码"改为专属前缀字节 `skPrefixMeta=0x02`。此前一个名叫 `#meta` 的用户成员/字段/键会编码成与 meta 项相同的字节,**静默覆盖** `t/exp/cnt/il/ir`（数据损坏）；现改按前缀字节判定（`isMetaItem`）而非解码后比字符串,真正的 `#meta` 成员得以正确存取。顺带把 `conditionFailureError` 从子串匹配错误文本改为 `errors.As` 命中 SDK 类型化异常并逐项检查 `CancellationReasons`——被限流/冲突的事务不再被误判为丢 CAS（原会耗尽 RMW 重试）。全测试绿 |
+| redimo **v2.4.0** | **正确性修复 + 去重 + 请求级 context（未改存储格式）**。修 6 个库级 bug（均新增回归测试并对 v2.3.0 反证失败）：LREM 头/尾选取按十进制字符串比 skN（`"10"<"2"`）导致删错项→改按解析 int64 序；SRANDMEMBER 不过滤 `#meta`（可泄漏为随机成员）；`zGeneralRange` 词法路径/`zGeneralCount` 词法路径在无界 `- +` 时含 `#meta`；HLEN/SCARD/ZCARD 用 `Select=Count` 把 `#meta` 多算 1；LSET 再插失败时吞错误还报 `ok=true`。清理：删 `SweepOrphans` 恒假分支；抽 `doIncr`（INCR*/HINCR* 共用）；三个近同的 list 分页循环合并为 `pagedListItems`。新增 `Client.WithContext(ctx)` 把请求级 context 贯穿所有 DynamoDB 调用（替换硬编码 `context.TODO()`,默认 `Background()`）。全测试绿(含 `-race`) |
+| redimos **v1.22.0** | 升 redimo **v2.4.0**（跨越 v2.3.0 的 `#meta` 前缀破坏性变更,未上线故无迁移成本）。代理端零改动：容量(SCARD/HLEN/ZCARD/LLEN)读 `meta.cnt`、词法/秩范围与 LSET/LTRIM/LREM/LINSERT 由代理自实现,故多数 v2.4.0 库级修复对代理为潜伏改善（redimo 库测试已覆盖）。**差分套件扩到 83 命令**（新增 LREM 高位下标数值序、ZRANGEBYLEX/ZREVRANGEBYLEX `- +`、ZLEXCOUNT `- +`/有界）——逐字节 vs Redis 3.2 全绿,复验代理路径经 v2.3.0 前缀变更后仍 `#meta` 安全。单元 + 集成(原子性/字符集/差分) 全绿 |
 
 ---
 
@@ -176,7 +179,7 @@ HyperLogLog 是存在 Redis String 里的 "HYLL" blob;和 BIT 一样 **纯命令
 - 环境:`REDIMOS_PROXY_ADDR`(必填,如 `rdms-proxy:6380`)、`REDIMOS_REDIS_ORACLE`(差分测试用,如 `redimos-redis32:6379`)。
 - **`charset_test.go`（全字符集）**:string 值/key 名、hash 字段+值、set/zset 成员、list 元素,全部对 **256 个单字节 + 0..255 全序列 + 内嵌 CRLF/NUL/RESP 注入样本** 做逐字节往返;实测全绿。
 - **`atomicity_test.go`（命令原子性）**:SETNX 20 轮×40 并发**恰好一个 `:1`**;INCR 16 路并发下**计数器 == 已确认 INCR 数**(CAS 从不丢/重已确认的更新;高争用下少量 INCR 会耗尽有界重试返回可重试错误,与 Redis 单线程不同,已在日志中标注)。
-- **`differential_test.go`（差分一致性）**:74 条 redimo 后端命令(string/key/hash/list/set/zset/BIT/HLL,只取顺序确定的)对真 Redis 3.2 **逐字节一致**。
+- **`differential_test.go`（差分一致性）**:**83 条** redimo 后端命令(string/key/hash/list/set/zset/BIT/HLL,只取顺序确定的)对真 Redis 3.2 **逐字节一致**。v1.22.0 起新增覆盖 LREM 高位下标数值序(重复项落在 `"10"<"2"` 字符串序边界)、ZRANGEBYLEX/ZREVRANGEBYLEX `- +`、ZLEXCOUNT `- +`/有界——复验代理的词法/秩范围路径经 redimo v2.3.0 `#meta` 前缀变更后仍与 Redis 逐字节一致且不泄漏/多算 `#meta`。
 
 实测(vs redis:3.2.12)四项全绿。
 
