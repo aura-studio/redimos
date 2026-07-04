@@ -15,7 +15,7 @@
 
 | 维度 | 状态 |
 |---|---|
-| 命令覆盖 | 174 条中 111 条经 redimo 支持（含 v1.5 GEO、v1.6 BIT、v1.7 HLL 家族）；其余为控制面（连接/桩，不需存储）或未支持家族（阻塞/脚本/事务/复制…） |
+| 命令覆盖 | 174 条中 111 条经 redimo 存储支持（含 v1.5/v1.8 GEO、v1.6 BIT、v1.7 HLL 家族）；其余为控制面（连接/桩，不需存储）或未支持家族（阻塞/脚本/事务/复制…） |
 | **字符/字节安全** | ✅ **完全对齐**：key、string 值、hash 字段名/值、set/zset 成员、list 元素对 0x00–0xff 全部 256 个字节值与 Redis 一致，无碰撞（v2.0.1 起） |
 | **并发原子性** | ⚠️ **部分等同**：单项读改写（INCR/HINCRBY/APPEND…）与分值自增已原子；多项/多步写（S\*STORE、Z\*STORE、SMOVE、RPOPLPUSH、SETNX、部分写可见性）**非原子**，与 Redis 单线程模型不等同 |
 | 差分（单连接） | 大量命令字节一致；残余差异见 §4 |
@@ -39,6 +39,7 @@
 | redimos **v1.5.1** | FLUSHALL/FLUSHDB 从「不支持」改为「代理拒绝」（专属拒绝消息） |
 | redimos **v1.6.0** | 新增 **BIT 家族**（SETBIT/GETBIT/BITCOUNT/BITPOS/BITOP/BITFIELD），纯命令层，单键字节兼容 |
 | redimos **v1.7.0** | 新增 **HLL 家族**（PFADD/PFCOUNT/PFMERGE），纯命令层,Redis 3.2 hll.c 忠实移植 |
+| redimos **v1.8.0** | **GEO 改为字节兼容版**：在 zset 之上重写（member.score = 52-bit geohash，与 Redis 同构），弃用 redimo 的 S2 seam；GEOPOS/GEOHASH/GEODIST/WITHHASH 与 Redis 3.2 **逐字节一致**（实测 265/265 差分通过） |
 
 ---
 
@@ -108,20 +109,22 @@ Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多
 | 多步写事务化 | 架构 | 用 `TransactWriteItems` 收口 S\*STORE/Z\*STORE/SMOVE/RPOPLPUSH/SETNX + 部分写可见性 |
 | score 解析对齐 | 差分 | 移植 glibc `strtod` 语义 |
 | arity 错误文本 | 差分 | 系统性改成 3.2 裸大写风格（测试改动大） |
-| GEO STORE/STOREDIST + 字节兼容 | 功能/差分 | GEO 家族已在 **v1.5.0 实现（功能版，见 §7）**；余下 STORE/STOREDIST 未做，且 GEOPOS/GEOHASH/GEODIST 因 S2 编码与 Redis 52-bit geohash 不同而低位有差 |
+| GEO STORE/STOREDIST | 功能 | GEO 家族已在 **v1.8.0 字节兼容（见 §7）**；仅余 `STORE`/`STOREDIST` 两个可选项未做（GEORADIUS 结果写入另一 zset），其余全部逐字节一致 |
 | HINCRBYFLOAT 精度 / 数值域 | 平台固有 | 需 long double 模拟 / 换数值编码，通常不做 |
 
 ---
 
-## 7. GEO（v1.5.0 已支持，功能版）
+## 7. GEO（v1.8.0 字节兼容版）
 
-Redis GEO 本质是 zset（member 的 score 编码位置，`TYPE` 返回 `zset`）。redimos v1.5.0 把 6 个 GEO 命令接到 redimo 的 GEO 原语：
+Redis GEO 本质就是 zset（member 的 score 编码位置，`TYPE` 返回 `zset`）。**v1.8.0 按 Redis 自身的做法重写**：一个 GEO 键就是一个 zset，member 的 score = 该位置的 **52-bit geohash**（lat 限 Web-Mercator 区间 [-85.05, 85.05]，26 位 lat + 26 位 lon 交错，恰好可被 float64 精确表示）。6 个命令因此变成纯命令层逻辑，直接建在 zset store 之上——不再需要 redimo 的 GEO 原语，旧的 `storage.GeoStore`（S2）seam 已删除。
 
-- **已实现**：GEOADD / GEODIST / GEOPOS / GEOHASH / GEORADIUS / GEORADIUSBYMEMBER；GEORADIUS 支持 `WITHCOORD` / `WITHDIST` / `WITHHASH` / `COUNT` / `ASC` / `DESC`；单位 m/km/mi/ft；非 zset 键回 `WRONGTYPE`；GEOADD 维护 zset 的 meta/type + cnt。
-- **实现要点**：命令层在 `internal/command/geo.go`，经独立 `storage.GeoStore` seam 调 redimo；距离用 haversine + Redis 地球半径常量 `6372797.560856`；`WITHHASH` 的 52-bit geohash 编码与 Redis **完全一致**。
-- **与 Redis 3.2 的实测对拍**（Palermo/Catania）：GEOADD、GEORADIUS[BYMEMBER] 的成员/顺序/COUNT/WITHDIST/WITHHASH、`TYPE`、WRONGTYPE、缺成员 → **逐字节一致**；GEODIST → 4 位小数一致（米单位差约 0.1m）；GEOPOS → 亚米级低位差；GEOHASH → 前 10 字符一致，尾部精度/补零不同。
+- **已实现**：GEOADD / GEODIST / GEOPOS / GEOHASH / GEORADIUS / GEORADIUSBYMEMBER；GEORADIUS[BYMEMBER] 支持 `WITHCOORD` / `WITHDIST` / `WITHHASH` / `COUNT` / `ASC` / `DESC`；单位 m/km/mi/ft；非 zset 键回 `WRONGTYPE`；GEOADD 维护 zset 的 meta/type + cnt，非法单位/越界坐标的错误文本对齐 Redis。
+- **实现要点**：`internal/command/geohash.go` 忠实移植 Redis geohash 的 encode/decode/deinterleave 与 11 字符标准 geohash 串；`geo.go` 用 `ZAdd`/`ZScore`/`ZRangeByRank` 落地。GEOADD 存 `geohashEncode52(lat,lon)` 为 score；GEOPOS/GEOHASH/GEODIST 从 score 解码回坐标；GEORADIUS 读全部成员、用 haversine 精确距离过滤（与 Redis 用 geohash 邻格剪枝得到的**结果集完全相同**）。坐标格式复刻 Redis `%.17Lf` + 去尾零（`ld2string` humanfriendly）；距离用地球半径常量 `6372797.560856`。
+- **与 Redis 3.2 的实测对拍**：官方 Palermo/Catania 样例 + 120 个随机点的模糊差分，覆盖 GEOADD/GEOPOS/GEOHASH/GEODIST（m/km/mi/ft）/GEORADIUS[BYMEMBER]（全 `WITH*` 组合/`COUNT`/`ASC`/`DESC`）以及全部错误路径（非法单位/越界/参数个数/WRONGTYPE/空键）→ **265/265 项逐字节一致**。
 
-**未做 / 差异根因**：`STORE` / `STOREDIST` 选项尚未实现。GEOPOS/GEOHASH/GEODIST 的低位差源于 redimo 内部用 **Google S2 cell ID** 而非 Redis 的 52-bit 交错 geohash 存储位置；要达到这几项的字节兼容，需把 `redimo` 的 `GLocation` 编码换成 Redis geohash（lat 限 [-85.05, 85.05]）。GEORADIUS 的**成员正确性**不受影响（S2 CellUnionBound 是正确的球面覆盖）。
+**未做**：仅 `STORE` / `STOREDIST` 两个可选项（把 GEORADIUS 结果写入另一个 zset）尚未实现；其余全部字节兼容。
+
+> 备注：redimo 库自身仍保留基于 Google S2 的 GEO 原语（供其他使用方），redimos 只是不再走它——GEO 的字节兼容完全在 redimos 命令层达成，redimo 依赖版本不变（v2.0.1）。
 
 ---
 

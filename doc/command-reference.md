@@ -123,12 +123,12 @@
 | `bitfield` | `wm` | 1 | 是 | bit | 是 | **✓** 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子） |
 | `bitop` | `wm` | 2 | 是 | bit | 是 | **✓** 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子） |
 | `bitpos` | `r` | 1 | 是 | bit | 是 | **✓** 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子） |
-| `geoadd` | `wm` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
-| `geodist` | `r` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
-| `geohash` | `r` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
-| `geopos` | `r` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
-| `georadius` | `w` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
-| `georadiusbymember` | `w` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0 → 经 redimo（GEO，功能版） |
+| `geoadd` | `wm` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0；v1.8.0 改字节兼容版（zset + 52-bit geohash，非 S2）→ 经 redimo 存储 |
+| `geodist` | `r` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0；v1.8.0 改字节兼容版（zset + 52-bit geohash，非 S2）→ 经 redimo 存储 |
+| `geohash` | `r` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0；v1.8.0 改字节兼容版（zset + 52-bit geohash，非 S2）→ 经 redimo 存储 |
+| `geopos` | `r` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0；v1.8.0 改字节兼容版（zset + 52-bit geohash，非 S2）→ 经 redimo 存储 |
+| `georadius` | `w` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0；v1.8.0 改字节兼容版（zset + 52-bit geohash，非 S2）→ 经 redimo 存储 |
+| `georadiusbymember` | `w` | 1 | 是 | geo | 是 | **✓** 新增 v1.5.0；v1.8.0 改字节兼容版（zset + 52-bit geohash，非 S2）→ 经 redimo 存储 |
 | `getbit` | `rF` | 1 | 是 | bit | 是 | **✓** 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子） |
 | `pfadd` | `wmF` | 1 | 是 | hll | 是 | **✓** 新增 v1.7.0 → 经 redimo（HLL；PFCOUNT 低基数字节一致、高基数在误差内） |
 | `pfcount` | `r` | 1 | 是 | hll | 是 | **✓** 新增 v1.7.0 → 经 redimo（HLL；PFCOUNT 低基数字节一致、高基数在误差内） |

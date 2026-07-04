@@ -25,7 +25,8 @@ bit = set()
 # PFADD/PFCOUNT/PFMERGE implemented (v1.7.0); pfdebug stays unsupported (debug).
 hll_new = set('pfadd pfcount pfmerge'.split())
 hll = set('pfdebug'.split())
-# The 6 base GEO commands are implemented (v1.5.0); the read-only _ro variants
+# The 6 base GEO commands are implemented (v1.5.0; rewritten byte-compatible in
+# v1.8.0 as a zset with a 52-bit geohash score); the read-only _ro variants
 # (Redis 3.2.10+) are not registered.
 geonew = set('geoadd geodist geopos geohash georadius georadiusbymember'.split())
 geo = set('georadius_ro georadiusbymember_ro'.split())
@@ -77,7 +78,7 @@ for n, ar, s, fk in rows:
         elif n in newly_bit:
             reason = '✓ 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子）'
         elif n in newly_geo:
-            reason = '✓ 新增 v1.5.0 → 经 redimo（GEO，功能版）'
+            reason = '✓ 新增 v1.5.0；v1.8.0 改字节兼容版（zset + 52-bit geohash，非 S2）→ 经 redimo 存储'
         elif n in newly:
             reason = '✓ 新增 v1.4.0 → 经 redimo'
         else:
