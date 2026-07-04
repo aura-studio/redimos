@@ -50,6 +50,12 @@ const (
 	// after a Redis Cluster ASK redirect during slot migration — a mode this
 	// non-cluster, single-keyspace proxy never enters, so there is nothing to toggle.
 	errAskingUnsupported = "ERR ASKING is not supported on this proxy (Redis Cluster slot migration does not apply)"
+
+	// errReadOnlyUnsupported rejects READONLY. It is the per-connection flag that
+	// lets a Redis Cluster replica serve (possibly stale) reads for the slots it
+	// replicates instead of redirecting to its master — inapplicable on a
+	// non-cluster proxy that has no replicas, slots, or replica read role.
+	errReadOnlyUnsupported = "ERR READONLY is not supported on this proxy (Redis Cluster replica reads do not apply)"
 )
 
 // registerRejected registers the deliberately-declined-but-real Redis 3.2 families
@@ -86,6 +92,7 @@ func (r *Router) registerRejected() {
 	// message. Arities are the Redis 3.2 command-table values.
 	r.registerReject("SHUTDOWN", -1, errShutdownUnsupported)
 	r.registerReject("ASKING", 1, errAskingUnsupported)
+	r.registerReject("READONLY", 1, errReadOnlyUnsupported)
 }
 
 // registerReject registers a single command as a first-class proxy rejection: the

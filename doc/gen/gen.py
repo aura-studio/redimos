@@ -17,12 +17,13 @@ reject = set('keys rename renamenx flushall flushdb'.split())
 pubsub = set('subscribe unsubscribe psubscribe punsubscribe publish pubsub'.split())
 script = set('eval evalsha script'.split())
 txn = set('multi exec discard watch unwatch'.split())
-admin = set('bgrewriteaof bgsave save lastsave slaveof replconf readonly readwrite wait pfselftest debug monitor cluster latency role sync psync'.split())
+admin = set('bgrewriteaof bgsave save lastsave slaveof replconf readwrite wait pfselftest debug monitor cluster latency role sync psync'.split())
 # Individual real-Redis-3.2 commands promoted from unsupported to proxy-reject as the
 # maintainer converts them one by one (each with its own dedicated message).
 reject_extra = {
     'shutdown': '代理拒绝：会终止所有租户共享的进程，且无 RDB 可先落盘（v1.11.0 起专属拒绝）',
     'asking':   '代理拒绝：Redis Cluster 槽迁移的一次性标志，非 cluster 单一 keyspace 代理无意义（v1.11.0 起专属拒绝）',
+    'readonly': '代理拒绝：Redis Cluster replica 只读服务开关，非 cluster 代理无 replica/slot 可切换（v1.12.0 起专属拒绝）',
 }
 # BIT family implemented (v1.6.0), byte-compatible for single-key ops (BITOP is
 # multi-key non-atomic).
