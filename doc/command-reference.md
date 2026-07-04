@@ -1,0 +1,227 @@
+# Redis 3.2 命令 × redimos 存储边界对照
+
+> 数据来源：`redis/redis` @ branch `3.2` · `src/server.c` 的 `redisCommandTable`（174 条真实命令，`QUIT` 在查表前被拦截故不在表内）。
+> 判据：命令带 `w`（写）/`r`（读键空间）标志即触及键空间；只有触及键空间**且被 redimos 支持**的命令才真正经 redimo（DynamoDB 存储层）。
+> 本表由 `doc/gen/` 的脚本从命令表自动生成，随 redimos 版本更新。
+
+## 汇总
+
+| 处置 | 数量 | 说明 |
+|---|---:|---|
+| **经 redimo** | 96 | 数据/键状态读写，真正打 DynamoDB |
+| 桩 | 7 | 固定/内存态回答（如 DBSIZE→`:0`），不碰键空间 |
+| 连接 | 4 | 仅连接状态（AUTH/SELECT/PING/ECHO） |
+| 代理拒绝 | 3 | 定制拒绝（KEYS/RENAME） |
+| 不支持 | 64 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
+| **合计** | 174 | 其中 96 需要 redimo |
+
+近期在 v1.4.0 新增并经 redimo 的命令（此前为「不支持」）：**MSETNX · SUBSTR · TOUCH · ZLEXCOUNT · ZREMRANGEBYLEX**。
+
+## 需要 redimo（数据面，经存储层） — 96 条
+
+数据与键的元信息（类型/TTL/计数）都存在 DynamoDB，这些命令必须读/写它。
+
+| 命令 | sflags | firstkey | 键空间 | 家族 | 走 redimo | 原因 |
+|---|---|---:|:---:|---|:---:|---|
+| `append` | `wm` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `decr` | `wmF` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `decrby` | `wmF` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `get` | `rF` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `getrange` | `r` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `getset` | `wm` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `incr` | `wmF` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `incrby` | `wmF` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `incrbyfloat` | `wmF` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `mget` | `r` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `mset` | `wm` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `msetnx` | `wm` | 1 | 是 | string | 是 | **✓** 新增 v1.4.0 → 经 redimo |
+| `psetex` | `wm` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `set` | `wm` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `setex` | `wm` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `setnx` | `wmF` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `setrange` | `wm` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `strlen` | `rF` | 1 | 是 | string | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `del` | `w` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `exists` | `rF` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `expire` | `wF` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `expireat` | `wF` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `persist` | `wF` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `pexpire` | `wF` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `pexpireat` | `wF` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `pttl` | `rF` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `touch` | `rF` | 1 | 是 | key/expiry | 是 | **✓** 新增 v1.4.0 → 经 redimo |
+| `ttl` | `rF` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `type` | `rF` | 1 | 是 | key/expiry | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hdel` | `wF` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hexists` | `rF` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hget` | `rF` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hgetall` | `r` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hincrby` | `wmF` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hincrbyfloat` | `wmF` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hkeys` | `rS` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hlen` | `rF` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hmget` | `r` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hmset` | `wm` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hscan` | `rR` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hset` | `wmF` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hsetnx` | `wmF` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hstrlen` | `rF` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `hvals` | `rS` | 1 | 是 | hash | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `lindex` | `r` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `linsert` | `wm` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `llen` | `rF` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `lpop` | `wF` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `lpush` | `wmF` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `lpushx` | `wmF` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `lrange` | `r` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `lrem` | `w` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `lset` | `wm` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `ltrim` | `w` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `rpop` | `wF` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `rpoplpush` | `wm` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `rpush` | `wmF` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `rpushx` | `wmF` | 1 | 是 | list | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `sadd` | `wmF` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `scard` | `rF` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `sdiff` | `rS` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `sdiffstore` | `wm` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `sinter` | `rS` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `sinterstore` | `wm` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `sismember` | `rF` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `smembers` | `rS` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `smove` | `wF` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `spop` | `wRF` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `srandmember` | `rR` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `srem` | `wF` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `sscan` | `rR` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `substr` | `r` | 1 | 是 | set | 是 | **✓** 新增 v1.4.0 → 经 redimo |
+| `sunion` | `rS` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `sunionstore` | `wm` | 1 | 是 | set | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zadd` | `wmF` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zcard` | `rF` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zcount` | `rF` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zincrby` | `wmF` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zinterstore` | `wm` | 0 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zlexcount` | `rF` | 1 | 是 | zset | 是 | **✓** 新增 v1.4.0 → 经 redimo |
+| `zrange` | `r` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zrangebylex` | `r` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zrangebyscore` | `r` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zrank` | `rF` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zrem` | `wF` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zremrangebylex` | `w` | 1 | 是 | zset | 是 | **✓** 新增 v1.4.0 → 经 redimo |
+| `zremrangebyrank` | `w` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zremrangebyscore` | `w` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zrevrange` | `r` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zrevrangebylex` | `r` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zrevrangebyscore` | `r` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zrevrank` | `rF` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zscan` | `rR` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zscore` | `rF` | 1 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `zunionstore` | `wm` | 0 | 是 | zset | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+| `scan` | `rR` | 0 | 是 | scan | 是 | 数据/键状态读写 → 经 redimo 映射到 DynamoDB |
+
+## 不需要 redimo — 桩 — 7 条
+
+redimos 用固定或内存态回答，不访问 DynamoDB。
+
+| 命令 | sflags | firstkey | 键空间 | 家族 | 走 redimo | 原因 |
+|---|---|---:|:---:|---|:---:|---|
+| `client` | `as` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
+| `command` | `lt` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
+| `config` | `lat` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
+| `dbsize` | `rF` | 0 | 是 | — | 否 | 服务器自省，固定/内存态回答；键计数用 :0 桩不扫表 |
+| `info` | `lt` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
+| `slowlog` | `a` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
+| `time` | `RF` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
+
+## 不需要 redimo — 连接层 — 4 条
+
+只操作连接状态。
+
+| 命令 | sflags | firstkey | 键空间 | 家族 | 走 redimo | 原因 |
+|---|---|---:|:---:|---|:---:|---|
+| `auth` | `sltF` | 0 | 否 | — | 否 | 仅操作连接状态，不碰键空间 |
+| `echo` | `F` | 0 | 否 | — | 否 | 仅操作连接状态，不碰键空间 |
+| `ping` | `tF` | 0 | 否 | — | 否 | 仅操作连接状态，不碰键空间 |
+| `select` | `lF` | 0 | 否 | — | 否 | 仅操作连接状态，不碰键空间 |
+
+## 不需要 redimo — 代理拒绝 — 3 条
+
+定制拒绝：DynamoDB 表达代价过高。
+
+| 命令 | sflags | firstkey | 键空间 | 家族 | 走 redimo | 原因 |
+|---|---|---:|:---:|---|:---:|---|
+| `keys` | `rS` | 0 | 是 | — | 否 | 代理拒绝：KEYS 无界全扫在 DynamoDB 上危险 |
+| `rename` | `w` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
+| `renamenx` | `wF` | 1 | 是 | — | 否 | 代理拒绝：RENAME 需整集合搬迁，代价过高 |
+
+## 不经 redimo — 未支持（未知命令） — 64 条
+
+是 Redis 数据命令，但 redimos 在命令层就短路，不发起存储调用。
+
+| 命令 | sflags | firstkey | 键空间 | 家族 | 走 redimo | 原因 |
+|---|---|---:|:---:|---|:---:|---|
+| `asking` | `F` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `bgrewriteaof` | `a` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `bgsave` | `a` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `bitcount` | `r` | 1 | 是 | — | 否 | 位运算：超范围 |
+| `bitfield` | `wm` | 1 | 是 | — | 否 | 位运算：超范围 |
+| `bitop` | `wm` | 2 | 是 | — | 否 | 位运算：超范围 |
+| `bitpos` | `r` | 1 | 是 | — | 否 | 位运算：超范围 |
+| `blpop` | `ws` | 1 | 是 | — | 否 | 阻塞命令：需长连接阻塞语义 |
+| `brpop` | `ws` | 1 | 是 | — | 否 | 阻塞命令：需长连接阻塞语义 |
+| `brpoplpush` | `wms` | 1 | 是 | — | 否 | 阻塞命令：需长连接阻塞语义 |
+| `cluster` | `a` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `debug` | `as` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `discard` | `sF` | 0 | 否 | — | 否 | 事务：超范围（无原子多命令） |
+| `dump` | `r` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了或超范围 |
+| `eval` | `s` | 0 | 否 | — | 否 | Lua 脚本：超范围 |
+| `evalsha` | `s` | 0 | 否 | — | 否 | Lua 脚本：超范围 |
+| `exec` | `sM` | 0 | 否 | — | 否 | 事务：超范围（无原子多命令） |
+| `flushall` | `w` | 0 | 是 | — | 否 | 全表清空：未支持 |
+| `flushdb` | `w` | 0 | 是 | — | 否 | 全表清空：未支持 |
+| `geoadd` | `wm` | 1 | 是 | — | 否 | GEO：超范围 |
+| `geodist` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
+| `geohash` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
+| `geopos` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
+| `georadius` | `w` | 1 | 是 | — | 否 | GEO：超范围 |
+| `georadius_ro` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
+| `georadiusbymember` | `w` | 1 | 是 | — | 否 | GEO：超范围 |
+| `georadiusbymember_ro` | `r` | 1 | 是 | — | 否 | GEO：超范围 |
+| `getbit` | `rF` | 1 | 是 | — | 否 | 位运算：超范围 |
+| `lastsave` | `RF` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `latency` | `aslt` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `migrate` | `w` | 0 | 是 | — | 否 | 键管理：DynamoDB 表达不了或超范围 |
+| `monitor` | `as` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `move` | `wF` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了或超范围 |
+| `multi` | `sF` | 0 | 否 | — | 否 | 事务：超范围（无原子多命令） |
+| `object` | `r` | 2 | 是 | — | 否 | 键管理：DynamoDB 表达不了或超范围 |
+| `pfadd` | `wmF` | 1 | 是 | — | 否 | HyperLogLog：超范围 |
+| `pfcount` | `r` | 1 | 是 | — | 否 | HyperLogLog：超范围 |
+| `pfdebug` | `w` | 0 | 是 | — | 否 | HyperLogLog：超范围 |
+| `pfmerge` | `wm` | 1 | 是 | — | 否 | HyperLogLog：超范围 |
+| `pfselftest` | `a` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `psubscribe` | `pslt` | 0 | 否 | — | 否 | 发布订阅：控制面，超范围 |
+| `psync` | `ars` | 0 | 是 | — | 否 | 服务器/复制/管理：超范围 |
+| `publish` | `pltF` | 0 | 否 | — | 否 | 发布订阅：控制面，超范围 |
+| `pubsub` | `pltR` | 0 | 否 | — | 否 | 发布订阅：控制面，超范围 |
+| `punsubscribe` | `pslt` | 0 | 否 | — | 否 | 发布订阅：控制面，超范围 |
+| `randomkey` | `rR` | 0 | 是 | — | 否 | 键管理：DynamoDB 表达不了或超范围 |
+| `readonly` | `F` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `readwrite` | `F` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `replconf` | `aslt` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `restore` | `wm` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了或超范围 |
+| `restore-asking` | `wmk` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了或超范围 |
+| `role` | `lst` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `save` | `as` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `script` | `s` | 0 | 否 | — | 否 | Lua 脚本：超范围 |
+| `setbit` | `wm` | 1 | 是 | — | 否 | 位运算：超范围 |
+| `shutdown` | `alt` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `slaveof` | `ast` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `sort` | `wm` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了或超范围 |
+| `subscribe` | `pslt` | 0 | 否 | — | 否 | 发布订阅：控制面，超范围 |
+| `sync` | `ars` | 0 | 是 | — | 否 | 服务器/复制/管理：超范围 |
+| `unsubscribe` | `pslt` | 0 | 否 | — | 否 | 发布订阅：控制面，超范围 |
+| `unwatch` | `sF` | 0 | 否 | — | 否 | 事务：超范围（无原子多命令） |
+| `wait` | `s` | 0 | 否 | — | 否 | 服务器/复制/管理：超范围 |
+| `watch` | `sF` | 1 | 否 | — | 否 | 事务：超范围（无原子多命令） |
