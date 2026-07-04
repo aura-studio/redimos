@@ -128,7 +128,6 @@ type Meta struct {
 	Count int64  // attribute cnt
 }
 
-
 // Store is the storage seam over the redimo fork v1.7. It currently exposes the
 // meta primitives that underpin type checking, O(1) counters and TTL/expiry;
 // data-structure operations are appended by later command tasks.
@@ -1859,7 +1858,7 @@ func (s *redimoStore) LPush(_ context.Context, pk string, elements [][]byte) (in
 		return 0, nil
 	}
 
-	vals := make([]interface{}, len(elements))
+	vals := make([]any, len(elements))
 	for i, e := range elements {
 		vals[i] = redimo.BytesValue{B: e}
 	}
@@ -1878,7 +1877,7 @@ func (s *redimoStore) RPush(_ context.Context, pk string, elements [][]byte) (in
 		return 0, nil
 	}
 
-	vals := make([]interface{}, len(elements))
+	vals := make([]any, len(elements))
 	for i, e := range elements {
 		vals[i] = redimo.BytesValue{B: e}
 	}
@@ -2070,4 +2069,3 @@ func (s *redimoStore) ZScan(_ context.Context, pk string, lek map[string]types.A
 
 	return members, nextLEK, nil
 }
-

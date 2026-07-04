@@ -60,6 +60,8 @@
 | redimo **v2.3.0** | **`#meta` 专属排序键前缀（未上线,破坏性）**：保留项从"把字符串 `#meta` 走成员前缀 `0x01` 编码"改为专属前缀字节 `skPrefixMeta=0x02`。此前一个名叫 `#meta` 的用户成员/字段/键会编码成与 meta 项相同的字节,**静默覆盖** `t/exp/cnt/il/ir`（数据损坏）；现改按前缀字节判定（`isMetaItem`）而非解码后比字符串,真正的 `#meta` 成员得以正确存取。顺带把 `conditionFailureError` 从子串匹配错误文本改为 `errors.As` 命中 SDK 类型化异常并逐项检查 `CancellationReasons`——被限流/冲突的事务不再被误判为丢 CAS（原会耗尽 RMW 重试）。全测试绿 |
 | redimo **v2.4.0** | **正确性修复 + 去重 + 请求级 context（未改存储格式）**。修 6 个库级 bug（均新增回归测试并对 v2.3.0 反证失败）：LREM 头/尾选取按十进制字符串比 skN（`"10"<"2"`）导致删错项→改按解析 int64 序；SRANDMEMBER 不过滤 `#meta`（可泄漏为随机成员）；`zGeneralRange` 词法路径/`zGeneralCount` 词法路径在无界 `- +` 时含 `#meta`；HLEN/SCARD/ZCARD 用 `Select=Count` 把 `#meta` 多算 1；LSET 再插失败时吞错误还报 `ok=true`。清理：删 `SweepOrphans` 恒假分支；抽 `doIncr`（INCR*/HINCR* 共用）；三个近同的 list 分页循环合并为 `pagedListItems`。新增 `Client.WithContext(ctx)` 把请求级 context 贯穿所有 DynamoDB 调用（替换硬编码 `context.TODO()`,默认 `Background()`）。全测试绿(含 `-race`) |
 | redimos **v1.22.0** | 升 redimo **v2.4.0**（跨越 v2.3.0 的 `#meta` 前缀破坏性变更,未上线故无迁移成本）。代理端零改动：容量(SCARD/HLEN/ZCARD/LLEN)读 `meta.cnt`、词法/秩范围与 LSET/LTRIM/LREM/LINSERT 由代理自实现,故多数 v2.4.0 库级修复对代理为潜伏改善（redimo 库测试已覆盖）。**差分套件扩到 83 命令**（新增 LREM 高位下标数值序、ZRANGEBYLEX/ZREVRANGEBYLEX `- +`、ZLEXCOUNT `- +`/有界）——逐字节 vs Redis 3.2 全绿,复验代理路径经 v2.3.0 前缀变更后仍 `#meta` 安全。单元 + 集成(原子性/字符集/差分) 全绿 |
+| redimo **v2.5.0** | **`go` 指令 1.14→1.25 + 现代化**（无存储/API 语义变更）：`interface{}`→`any`(全包)、`HScanPage`/`ZScanPage` 抽泛型 `collectNonMetaItems[T]`(1.14 时因无泛型而搁置的去重现补上)、ZUNIONSTORE/ZINTERSTORE 的 MIN/MAX 累加器改用内置 `min`/`max`。`go mod tidy` 拆分 direct/indirect。全测试绿 |
+| redimos **v1.23.0** | **`go` 指令 1.24→1.25** + 升 redimo **v2.5.0**；`interface{}`→`any`(store.go)。纯现代化/依赖升级,零行为变更；单元 + 集成(原子性/字符集/差分 83 命令) 全绿 |
 
 ---
 
