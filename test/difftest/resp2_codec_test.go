@@ -150,7 +150,7 @@ func TestRESP2ErrorTextConsistency(t *testing.T) {
 		{"syntax", resp.ErrSyntax, "-ERR syntax error\r\n"},
 		{"noauth", resp.ErrNoAuth, "-NOAUTH Authentication required.\r\n"},
 		{"backend-limit", resp.ErrValueExceedsBackendLimit, "-ERR value exceeds backend limit (400KB)\r\n"},
-		{"invalid-cursor", resp.ErrInvalidCursor, "-ERR invalid cursor, restart scan\r\n"},
+		{"invalid-cursor", resp.ErrInvalidCursor, "-ERR invalid cursor\r\n"},
 		{"wrong-args-get", resp.ErrWrongNumberOfArgs("GET"),
 			"-ERR wrong number of arguments for 'get' command\r\n"},
 		{"wrong-args-hset-upper", resp.ErrWrongNumberOfArgs("HSET"),

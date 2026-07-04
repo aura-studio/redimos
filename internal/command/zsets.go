@@ -77,8 +77,12 @@ func (r *Router) registerZSets() {
 	t.Register("ZREMRANGEBYSCORE", 4, true, r.handleZRemRangeByScore)
 	// Task 15.2: single-pk scan, lexicographic range, and the in-memory store ops.
 	t.Register("ZSCAN", -3, false, r.handleZScan)
-	t.Register("ZRANGEBYLEX", 4, false, r.handleZRangeByLex)
-	t.Register("ZREVRANGEBYLEX", 4, false, r.handleZRevRangeByLex)
+	// ZRANGEBYLEX/ZREVRANGEBYLEX take an optional "LIMIT offset count" clause, so
+	// their arity is variadic (-4), matching Redis 3.2.
+	t.Register("ZRANGEBYLEX", -4, false, r.handleZRangeByLex)
+	t.Register("ZREVRANGEBYLEX", -4, false, r.handleZRevRangeByLex)
+	t.Register("ZLEXCOUNT", 4, false, r.handleZLexCount)
+	t.Register("ZREMRANGEBYLEX", 4, true, r.handleZRemRangeByLex)
 	t.Register("ZUNIONSTORE", -4, true, r.handleZUnionStore)
 	t.Register("ZINTERSTORE", -4, true, r.handleZInterStore)
 }
@@ -983,6 +987,13 @@ func (r *Router) zRangeByLex(ctx context.Context, c *server.Conn, args [][]byte,
 		min, max = second, first
 	}
 
+	// Optional "LIMIT offset count" trailer (Redis 3.2).
+	offset, count, ok := parseLexLimit(args[4:])
+	if !ok {
+		w.Error(resp.ErrSyntax)
+		return
+	}
+
 	_, live, wrongType, serr := r.zsetState(ctx, pk)
 	if serr != nil {
 		r.writeStoreError(c, serr)
@@ -1015,8 +1026,154 @@ func (r *Router) zRangeByLex(ctx context.Context, c *server.Conn, args [][]byte,
 	if rev {
 		filtered = storage.ZReverse(filtered)
 	}
+	filtered = applyZLimit(filtered, offset, count)
 
 	zMembersReply(w, filtered, false)
+}
+
+// parseLexLimit parses the optional "LIMIT offset count" trailer of the
+// ZRANGEBYLEX family. No trailer means (0, -1) = "all"; any other shape is a
+// syntax error.
+func parseLexLimit(rest [][]byte) (offset, count int, ok bool) {
+	if len(rest) == 0 {
+		return 0, -1, true
+	}
+	if len(rest) != 3 || !strings.EqualFold(string(rest[0]), "LIMIT") {
+		return 0, 0, false
+	}
+	o, err := ParseInt(rest[1])
+	if err != nil {
+		return 0, 0, false
+	}
+	n, err := ParseInt(rest[2])
+	if err != nil {
+		return 0, 0, false
+	}
+	return int(o), int(n), true
+}
+
+// applyZLimit applies a Redis LIMIT offset/count window to an ordered member
+// slice. A negative offset (or one past the end) yields nothing; a negative count
+// means "all remaining from offset".
+func applyZLimit(members []storage.ZMember, offset, count int) []storage.ZMember {
+	if offset < 0 || offset >= len(members) {
+		return members[:0]
+	}
+	members = members[offset:]
+	if count >= 0 && count < len(members) {
+		members = members[:count]
+	}
+	return members
+}
+
+// handleZLexCount implements ZLEXCOUNT key min max (Redis 3.2): reply the number
+// of members whose lexical value falls in [min, max] using Redis' '[' inclusive /
+// '(' exclusive / '-' / '+' bound syntax. An absent/expired key replies ":0"; a
+// live non-ZSet key replies WRONGTYPE.
+func (r *Router) handleZLexCount(ctx context.Context, c *server.Conn, args [][]byte) {
+	w := resp.NewWriter(c.Redcon())
+	pk := encodePK(c.DB(), args[1])
+
+	min, ok := parseLexBound(args[2])
+	if !ok {
+		w.Error(errNotValidStringRange)
+		return
+	}
+	max, ok := parseLexBound(args[3])
+	if !ok {
+		w.Error(errNotValidStringRange)
+		return
+	}
+
+	_, live, wrongType, serr := r.zsetState(ctx, pk)
+	if serr != nil {
+		r.writeStoreError(c, serr)
+		return
+	}
+	if wrongType {
+		w.Error(resp.ErrWrongType)
+		return
+	}
+	if !live {
+		w.Int(0)
+		return
+	}
+
+	all, merr := r.Storage.Store.ZRangeByRank(ctx, pk, 0, -1, false)
+	if merr != nil {
+		r.writeStoreError(c, merr)
+		return
+	}
+	var n int64
+	for _, m := range all {
+		if lexInRange(m.Member, min, max) {
+			n++
+		}
+	}
+
+	w.Int(n)
+}
+
+// handleZRemRangeByLex implements ZREMRANGEBYLEX key min max (Redis 3.2): remove
+// every member whose lexical value falls in [min, max] and reply the number
+// removed. An absent/expired key replies ":0"; a live non-ZSet key replies
+// WRONGTYPE. A removal that empties the set deletes the key (via adjustCount).
+func (r *Router) handleZRemRangeByLex(ctx context.Context, c *server.Conn, args [][]byte) {
+	w := resp.NewWriter(c.Redcon())
+	pk := encodePK(c.DB(), args[1])
+
+	min, ok := parseLexBound(args[2])
+	if !ok {
+		w.Error(errNotValidStringRange)
+		return
+	}
+	max, ok := parseLexBound(args[3])
+	if !ok {
+		w.Error(errNotValidStringRange)
+		return
+	}
+
+	_, live, wrongType, serr := r.zsetState(ctx, pk)
+	if serr != nil {
+		r.writeStoreError(c, serr)
+		return
+	}
+	if wrongType {
+		w.Error(resp.ErrWrongType)
+		return
+	}
+	if !live {
+		w.Int(0)
+		return
+	}
+
+	all, merr := r.Storage.Store.ZRangeByRank(ctx, pk, 0, -1, false)
+	if merr != nil {
+		r.writeStoreError(c, merr)
+		return
+	}
+	var members []string
+	for _, m := range all {
+		if lexInRange(m.Member, min, max) {
+			members = append(members, m.Member)
+		}
+	}
+	if len(members) == 0 {
+		w.Int(0)
+		return
+	}
+
+	removed, rerr := r.Storage.Store.ZRem(ctx, pk, members)
+	if rerr != nil {
+		r.writeStoreError(c, rerr)
+		return
+	}
+	if err := r.adjustCount(ctx, pk, meta.TypeZSet, -int64(removed)); err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+
+	w.Int(int64(removed))
 }
 
 // handleZUnionStore implements ZUNIONSTORE dest numkeys key [key ...] [WEIGHTS

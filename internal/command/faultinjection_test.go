@@ -22,7 +22,7 @@ import (
 //   - an instance-kill cursor invalidation (requirement 13.5): a SCAN continuation
 //     cursor minted by one instance, replayed after that instance is "killed" (its
 //     in-memory cursor registry lost / replaced by a fresh one on a new instance),
-//     must surface "-ERR invalid cursor, restart scan".
+//     must surface "-ERR invalid cursor".
 //
 // The storage seam that CLASSIFIES a throttle and fires the OnThrottle alerting
 // hook is exercised in internal/storage (throttle_test.go and
@@ -109,7 +109,7 @@ func startScanServerReg(t *testing.T, store storage.Store, reg *scan.Registry, i
 // then "killed": its in-memory cursor registry is gone, and a fresh instance B
 // comes up with an empty registry and a different instance id. Replaying A's
 // cursor against B — a cursor B's registry never handed out and does not own — is
-// rejected with the byte-for-byte "-ERR invalid cursor, restart scan", so the
+// rejected with the byte-for-byte "-ERR invalid cursor", so the
 // client restarts the scan from cursor 0 rather than silently losing or repeating
 // the keyspace.
 func TestFaultInjection_InstanceKillInvalidatesCursor(t *testing.T) {
@@ -140,7 +140,7 @@ func TestFaultInjection_InstanceKillInvalidatesCursor(t *testing.T) {
 
 	// Replaying instance A's cursor against instance B is rejected: B's registry
 	// never minted it and does not own it.
-	const want = "-ERR invalid cursor, restart scan"
+	const want = "-ERR invalid cursor"
 	if got := sendRead(t, connB, rB, "SCAN "+cursorA); got != want {
 		t.Errorf("SCAN <instance-A cursor> against instance B = %q, want %q", got, want)
 	}

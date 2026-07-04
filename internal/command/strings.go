@@ -45,6 +45,7 @@ func (r *Router) registerStrings() {
 	t.Register("GETSET", 3, true, r.handleGetSet)
 	t.Register("MGET", -2, false, r.handleMGet)
 	t.Register("MSET", -3, true, r.handleMSet)
+	t.Register("MSETNX", -3, true, r.handleMSetNX)
 	t.Register("INCR", 2, true, r.handleIncr)
 	t.Register("DECR", 2, true, r.handleDecr)
 	t.Register("INCRBY", 3, true, r.handleIncrBy)
@@ -54,6 +55,8 @@ func (r *Router) registerStrings() {
 	t.Register("STRLEN", 2, false, r.handleStrlen)
 	t.Register("SETRANGE", 4, true, r.handleSetRange)
 	t.Register("GETRANGE", 4, false, r.handleGetRange)
+	// SUBSTR is the deprecated Redis alias of GETRANGE with identical semantics.
+	t.Register("SUBSTR", 4, false, r.handleGetRange)
 }
 
 // msetBatchKeys bounds how many keys MSET writes per TransactWriteItems batch
@@ -502,6 +505,10 @@ func (r *Router) handleMSet(ctx context.Context, c *server.Conn, args [][]byte) 
 			key, val := pairs[i], pairs[i+1]
 			pk := encodePK(c.DB(), key)
 
+			if err := r.overwriteAnyType(ctx, pk); err != nil {
+				r.writeStoreError(c, err)
+				return
+			}
 			if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
 				r.writeStoreError(c, err)
 				return
@@ -518,6 +525,61 @@ func (r *Router) handleMSet(ctx context.Context, c *server.Conn, args [][]byte) 
 	}
 
 	w.SimpleString("OK")
+}
+
+// handleMSetNX implements MSETNX key value [key value ...] (Redis 3.2): set all
+// the given keys only if NONE of them already exists, replying ":1" when applied
+// and ":0" when any key existed (no key is written in that case). Like MSET it is
+// type-agnostic and carries no TTL. The all-or-nothing existence check and the
+// writes are separate steps (not atomic across keys), matching redimos' other
+// multi-key writes; a concurrent writer can race the gap.
+func (r *Router) handleMSetNX(ctx context.Context, c *server.Conn, args [][]byte) {
+	w := resp.NewWriter(c.Redcon())
+	pairs := args[1:]
+
+	if len(pairs)%2 != 0 {
+		w.Error(resp.ErrWrongNumberOfArgs("msetnx"))
+		return
+	}
+
+	// Validate every value's size up front: a violation rejects the whole command.
+	for i := 0; i < len(pairs); i += 2 {
+		if err := guard.CheckWrite(pairs[i], nil, [][]byte{pairs[i+1]}); err != nil {
+			r.writeStoreError(c, err)
+			return
+		}
+	}
+
+	// Reject if any target key is already live (of any type).
+	for i := 0; i < len(pairs); i += 2 {
+		live, err := r.keyLive(ctx, encodePK(c.DB(), pairs[i]))
+		if err != nil {
+			r.writeStoreError(c, err)
+			return
+		}
+		if live {
+			w.Int(0)
+			return
+		}
+	}
+
+	for i := 0; i < len(pairs); i += 2 {
+		pk := encodePK(c.DB(), pairs[i])
+		if err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
+			r.writeStoreError(c, err)
+			return
+		}
+		if err := r.Storage.Store.SetString(ctx, pk, pairs[i+1]); err != nil {
+			r.writeStoreError(c, err)
+			return
+		}
+		if _, err := r.Storage.Meta.Persist(ctx, pk); err != nil {
+			r.writeStoreError(c, err)
+			return
+		}
+	}
+
+	w.Int(1)
 }
 
 // handleIncr implements INCR key (requirements 5.8, 5.9): increment the integer

@@ -392,7 +392,7 @@ func TestSetClearsExistingTTL(t *testing.T) {
 
 func TestSetInvalidExpireTime(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	want := "-ERR invalid expire time in 'set' command"
+	want := "-ERR invalid expire time in set"
 	if got := sendRead(t, conn, r, "SET k v EX 0"); got != want {
 		t.Errorf("SET k v EX 0 = %q, want %q", got, want)
 	}
@@ -509,7 +509,7 @@ func TestSetEX(t *testing.T) {
 
 func TestSetEXInvalidExpire(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	want := "-ERR invalid expire time in 'setex' command"
+	want := "-ERR invalid expire time in setex"
 	if got := sendRead(t, conn, r, "SETEX k 0 v"); got != want {
 		t.Errorf("SETEX k 0 v = %q, want %q", got, want)
 	}
@@ -529,7 +529,7 @@ func TestPSetEX(t *testing.T) {
 
 func TestPSetEXInvalidExpire(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	want := "-ERR invalid expire time in 'psetex' command"
+	want := "-ERR invalid expire time in psetex"
 	if got := sendRead(t, conn, r, "PSETEX k -5 v"); got != want {
 		t.Errorf("PSETEX k -5 v = %q, want %q", got, want)
 	}
@@ -839,17 +839,18 @@ func TestMSetBatchingBoundary(t *testing.T) {
 	}
 }
 
-func TestMSetWrongTypeReturnsWrongType(t *testing.T) {
+func TestMSetOverwritesAnyType(t *testing.T) {
 	store := newFakeStringStore()
-	// Seed a hash key; MSET writes go through EnsureType(TypeString) which rejects
-	// a type conflict with WRONGTYPE (design Property 1).
+	// Seed a hash key; MSET is type-agnostic in Redis and overwrites it.
 	store.metas["0:h"] = storage.Meta{Type: string(meta.TypeHash)}
 	store.live["0:h"] = true
 
 	conn, r := startStringServer(t, store, fixedNow(1000))
-	want := "-WRONGTYPE Operation against a key holding the wrong kind of value"
-	if got := sendRead(t, conn, r, "MSET h v"); got != want {
+	if got, want := sendRead(t, conn, r, "MSET h v"), "+OK"; got != want {
 		t.Errorf("MSET h v (hash key) = %q, want %q", got, want)
+	}
+	if got, want := sendRead(t, conn, r, "GET h"), "$v"; got != want {
+		t.Errorf("GET h after MSET overwrite = %q, want %q", got, want)
 	}
 }
 

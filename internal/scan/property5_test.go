@@ -24,7 +24,7 @@ import (
 //   - Invalid cursor is explicit (需求 13.5): a cursor that was never saved, was
 //     evicted, expired past the TTL, or belongs to a different instance must
 //     return ok=false — the command layer maps ok=false to
-//     "-ERR invalid cursor, restart scan". Load never returns a silent
+//     "-ERR invalid cursor". Load never returns a silent
 //     wrong/stale LEK for these cases.
 //
 // Helpers here carry a p5 prefix to avoid collisions with registry_test.go.

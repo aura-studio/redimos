@@ -156,7 +156,7 @@ func TestZScanInvalidCursor(t *testing.T) {
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
 	sendRead(t, conn, r, "ZADD z 1 a")
 
-	want := "-ERR invalid cursor, restart scan"
+	want := "-ERR invalid cursor"
 	if got := sendRead(t, conn, r, "ZSCAN z notanumber"); got != want {
 		t.Errorf("ZSCAN z notanumber = %q, want %q", got, want)
 	}

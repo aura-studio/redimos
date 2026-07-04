@@ -193,7 +193,7 @@ func TestSScanUnknownCursorIsInvalid(t *testing.T) {
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
 	sendRead(t, conn, r, "SADD s a")
 
-	want := "-ERR invalid cursor, restart scan"
+	want := "-ERR invalid cursor"
 	if got := sendRead(t, conn, r, "SSCAN s 123456789"); got != want {
 		t.Errorf("SSCAN <unknown cursor> = %q, want %q", got, want)
 	}

@@ -185,7 +185,7 @@ func TestHScanUnknownCursorIsInvalid(t *testing.T) {
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
 	sendRead(t, conn, r, "HSET h a 1")
 
-	want := "-ERR invalid cursor, restart scan"
+	want := "-ERR invalid cursor"
 	if got := sendRead(t, conn, r, "HSCAN h 123456789"); got != want {
 		t.Errorf("HSCAN <unknown cursor> = %q, want %q", got, want)
 	}
@@ -243,7 +243,7 @@ func TestHScanEvictedCursorIsInvalid(t *testing.T) {
 
 	// Replaying the evicted cursor C1 is rejected.
 	send(t, conn, "HSCAN h "+c1+" COUNT 2")
-	if got, want := scanReadLine(t, r), "-ERR invalid cursor, restart scan"; got != want {
+	if got, want := scanReadLine(t, r), "-ERR invalid cursor"; got != want {
 		t.Errorf("HSCAN <evicted cursor> = %q, want %q", got, want)
 	}
 }

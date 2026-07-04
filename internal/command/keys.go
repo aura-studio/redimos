@@ -32,6 +32,10 @@ func (r *Router) registerKeys() {
 	t := r.Table
 	t.Register("DEL", -2, true, r.handleDel)
 	t.Register("EXISTS", -2, false, r.handleExists)
+	// TOUCH counts how many of the given keys exist. redimos has no LRU/idle clock
+	// to update, so it is byte-for-byte identical to EXISTS (existence count with
+	// multiplicity), matching Redis 3.2's reply.
+	t.Register("TOUCH", -2, false, r.handleExists)
 	t.Register("TYPE", 2, false, r.handleType)
 	t.Register("EXPIRE", 3, true, r.handleExpire)
 	t.Register("EXPIREAT", 3, true, r.handleExpireAt)

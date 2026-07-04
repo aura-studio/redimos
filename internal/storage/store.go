@@ -1608,6 +1608,15 @@ func (s *redimoStore) zAscending(pk string) ([]ZMember, error) {
 		out[i] = ZMember{Member: m.Member, Score: m.Score}
 	}
 
+	// Redis orders a sorted set by ascending score, breaking ties by ascending
+	// byte-lexicographic member. The score index (LSI on skN) orders by score, but
+	// its tie-break among equal scores is the backend's and is not guaranteed to be
+	// the member order (DynamoDB Local, for one, does not tie-break by the table
+	// sort key). Re-sort in process with the exact Redis comparator so ties are
+	// member-lexicographic — members round-trip as exact bytes, so a Go string
+	// compare is a byte compare.
+	SortZMembers(out)
+
 	return out, nil
 }
 

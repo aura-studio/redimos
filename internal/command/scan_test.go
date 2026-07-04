@@ -228,7 +228,7 @@ func TestScanUnknownCursorIsInvalid(t *testing.T) {
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
 	sendRead(t, conn, r, "SET a 1")
 
-	want := "-ERR invalid cursor, restart scan"
+	want := "-ERR invalid cursor"
 	if got := sendRead(t, conn, r, "SCAN 123456789"); got != want {
 		t.Errorf("SCAN <unknown cursor> = %q, want %q", got, want)
 	}
@@ -284,7 +284,7 @@ func TestScanEvictedCursorIsInvalid(t *testing.T) {
 
 	// Replaying the evicted cursor C1 is rejected.
 	send(t, conn, "SCAN "+c1+" COUNT 2")
-	if got, want := scanReadLine(t, r), "-ERR invalid cursor, restart scan"; got != want {
+	if got, want := scanReadLine(t, r), "-ERR invalid cursor"; got != want {
 		t.Errorf("SCAN <evicted cursor> = %q, want %q", got, want)
 	}
 }

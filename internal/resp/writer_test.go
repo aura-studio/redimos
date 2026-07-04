@@ -131,7 +131,7 @@ func TestErrorConstants(t *testing.T) {
 		{"syntax", ErrSyntax, "ERR syntax error"},
 		{"noauth", ErrNoAuth, "NOAUTH Authentication required."},
 		{"backend limit", ErrValueExceedsBackendLimit, "ERR value exceeds backend limit (400KB)"},
-		{"invalid cursor", ErrInvalidCursor, "ERR invalid cursor, restart scan"},
+		{"invalid cursor", ErrInvalidCursor, "ERR invalid cursor"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

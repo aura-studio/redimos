@@ -185,8 +185,9 @@ const (
 	ErrOffsetOutOfRange = "ERR offset is out of range"
 
 	// ErrInvalidCursor is returned when a SCAN cursor is unknown (LRU eviction,
-	// instance restart, or cross-instance reuse). Requirement 3.8, 13.5.
-	ErrInvalidCursor = "ERR invalid cursor, restart scan"
+	// instance restart, or cross-instance reuse). Requirement 3.8, 13.5. Matches
+	// Redis 3.2 byte-for-byte ("ERR invalid cursor").
+	ErrInvalidCursor = "ERR invalid cursor"
 
 	// ErrInvalidDBIndex is returned when SELECT n (n != 0) is issued while
 	// multi-DB is disabled, or when the index is otherwise out of range.
@@ -226,11 +227,11 @@ func ErrUnknownCommand(name string) string {
 }
 
 // ErrInvalidExpireTime builds the invalid-expire-time error text for cmd, used
-// when a SET/SETEX/PSETEX expire argument is not strictly positive. The command
-// name is lowercased to match Redis/Pika, e.g. ErrInvalidExpireTime("setex")
-// yields "ERR invalid expire time in 'setex' command". Requirement 5.5.
+// when a SET/SETEX/PSETEX expire argument is not strictly positive. Matches Redis
+// 3.2 byte-for-byte: a bare lowercased command name with no quotes or " command"
+// suffix, e.g. ErrInvalidExpireTime("setex") -> "ERR invalid expire time in setex".
 func ErrInvalidExpireTime(cmd string) string {
-	return "ERR invalid expire time in '" + toLower(cmd) + "' command"
+	return "ERR invalid expire time in " + toLower(cmd)
 }
 
 // toLower lowercases ASCII command names without pulling in the strings package
