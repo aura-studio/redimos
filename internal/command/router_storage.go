@@ -38,11 +38,6 @@ type Storage struct {
 	// commands (matching NewRouter).
 	Store storage.Store
 
-	// Geo is the optional geospatial seam backing the GEO command family. When nil
-	// the GEO commands are not registered (they fall through to the unknown-command
-	// path). Production wiring supplies the same redimo-backed store here.
-	Geo storage.GeoStore
-
 	// Meta is the meta store used for type checks, existence/expiry and TTL. When
 	// nil it is derived from Store with the Enqueuer below (or a no-op when that
 	// is also nil).
@@ -152,12 +147,9 @@ func (r *Router) registerDataCommands() {
 	r.registerLists()
 	r.registerBit()
 	r.registerHLL()
-
-	// GEO is optional: only registered when a geospatial seam is wired, so a
-	// deployment without it leaves the GEO* commands on the unknown-command path.
-	if r.Storage.Geo != nil {
-		r.registerGeo()
-	}
+	// GEO is a Sorted Set with a geohash score, so it is served purely from the
+	// zset store — always available, no separate seam required.
+	r.registerGeo()
 }
 
 // now returns the current epoch seconds using the router's injected clock,

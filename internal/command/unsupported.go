@@ -3,8 +3,9 @@ package command
 // unsupported.go documents and pins down redimos' handling of the command
 // families the proxy deliberately does NOT support (requirement 4.1–4.8 and
 // design.md "明确不支持"): Pub/Sub, Lua (EVAL/EVALSHA/SCRIPT), transactions
-// (MULTI/EXEC/WATCH/UNWATCH/DISCARD), blocking pops (B*), bit operations,
-// HyperLogLog (PF*), GEO (GEO*), Streams (X*), and FLUSHALL/FLUSHDB.
+// (MULTI/EXEC/WATCH/UNWATCH/DISCARD), blocking pops (B*), and Streams (X*).
+// (Bit ops, HyperLogLog (PF*) and GEO (GEO*) ARE supported; FLUSHALL/FLUSHDB are
+// proxy-rejected — see bit.go, hll.go, geo.go and keys.go.)
 //
 // # Design decision: rely on the default unknown-command reply
 //
@@ -22,8 +23,8 @@ package command
 //     replies "-ERR unknown command '<name>'". The default path reproduces that
 //     reply verbatim, so the proxy is byte-for-byte identical to the oracle
 //     (requirement 4.8).
-//   - For the families Pika v3.2.2 DOES implement — Pub/Sub, transactions, bit
-//     operations, PF* (HyperLogLog), GEO*, and FLUSHALL/FLUSHDB — byte-for-byte
+//   - For the families Pika v3.2.2 DOES implement but redimos still declines —
+//     Pub/Sub and transactions — byte-for-byte
 //     parity is impossible without actually executing the command, which is an
 //     explicit non-goal (design "非目标"). Requirements 4.1–4.7 only require that
 //     these commands return an ERROR and never silently downgrade; the
@@ -68,9 +69,6 @@ var UnsupportedCommands = []string{
 
 	// Blocking list pops (requirement 4.4).
 	"BLPOP", "BRPOP", "BRPOPLPUSH",
-
-	// GEO (requirement 4.6).
-	"GEOADD", "GEODIST", "GEOPOS", "GEOHASH", "GEORADIUS", "GEORADIUSBYMEMBER",
 
 	// Streams (requirement 4.6).
 	"XADD", "XLEN", "XRANGE", "XREVRANGE", "XREAD", "XDEL", "XTRIM", "XINFO",

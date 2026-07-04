@@ -1,22 +1,21 @@
 package command
 
 // geo.go implements the GEO command family (GEOADD / GEODIST / GEOPOS / GEOHASH /
-// GEORADIUS / GEORADIUSBYMEMBER). A GEO key is a Sorted Set whose member score
-// encodes a location, so these handlers maintain the zset meta/type and cnt and
-// delegate the spatial work to the redimo-backed GeoStore seam (r.Storage.Geo).
+// GEORADIUS / GEORADIUSBYMEMBER) the way Redis does: a GEO key IS a Sorted Set
+// whose member score is the 52-bit geohash of the location (see geohash.go). So
+// these handlers are pure command-layer logic over the zset store — GEOADD is a
+// ZADD with a geohash score; GEOPOS/GEODIST/GEOHASH decode the score; GEORADIUS
+// reads the members and filters by exact haversine distance. This makes
+// GEOPOS/GEOHASH/GEODIST/WITHHASH byte-identical to Redis 3.2.
 //
-// Scope (functional v1): full GEOADD/GEODIST/GEOPOS/GEOHASH and GEORADIUS[BYMEMBER]
-// with WITHCOORD / WITHDIST / WITHHASH / COUNT / ASC / DESC. STORE / STOREDIST are
-// not yet supported. Because the backing store encodes positions with S2 rather
-// than Redis' 52-bit geohash, GEOPOS/GEOHASH/GEODIST values are close to but not
-// byte-identical with Redis; GEORADIUS membership (who is within the radius) is
-// correct.
+// Not yet supported: STORE / STOREDIST.
 
 import (
 	"context"
-	"math"
+	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/aura-studio/redimos/v2/internal/guard"
 	"github.com/aura-studio/redimos/v2/internal/meta"
@@ -25,7 +24,10 @@ import (
 	"github.com/aura-studio/redimos/v2/internal/storage"
 )
 
-const earthRadiusMeters = 6372797.560856
+const errNotGeoFloat = "ERR value is not a valid float"
+
+// errGeoUnit matches Redis' reply for an unrecognised distance unit (geo.c).
+const errGeoUnit = "ERR unsupported unit provided. please use m, km, ft, mi"
 
 func (r *Router) registerGeo() {
 	t := r.Table
@@ -37,8 +39,7 @@ func (r *Router) registerGeo() {
 	t.Register("GEORADIUSBYMEMBER", -5, true, r.handleGeoRadiusByMember)
 }
 
-// parseGeoUnit maps a Redis unit token to metres-per-unit. ok is false for an
-// unknown unit.
+// parseGeoUnit maps a Redis unit token to metres-per-unit.
 func parseGeoUnit(b []byte) (float64, bool) {
 	switch string(b) {
 	case "m":
@@ -54,10 +55,12 @@ func parseGeoUnit(b []byte) (float64, bool) {
 	}
 }
 
-const errNotGeoFloat = "ERR value is not a valid float"
+func validGeoCoord(lon, lat float64) bool {
+	return lon >= geoLonMin && lon <= geoLonMax && lat >= geoLatMin && lat <= geoLatMax
+}
 
-// handleGeoAdd implements GEOADD key longitude latitude member [longitude latitude
-// member ...]. Replies the number of elements newly added (not counting updates).
+// handleGeoAdd implements GEOADD key longitude latitude member [...]. Replies the
+// number of new members added.
 func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	key := args[1]
@@ -67,7 +70,7 @@ func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte
 		return
 	}
 
-	members := make(map[string]storage.GeoPoint, len(rest)/3)
+	members := make([]storage.ZMember, 0, len(rest)/3)
 	memberBytes := make([][]byte, 0, len(rest)/3)
 	for i := 0; i < len(rest); i += 3 {
 		lon, ok := parseFloatArg(rest[i])
@@ -80,7 +83,14 @@ func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte
 			w.Error(errNotGeoFloat)
 			return
 		}
-		members[string(rest[i+2])] = storage.GeoPoint{Lon: lon, Lat: lat}
+		if !validGeoCoord(lon, lat) {
+			w.Error(fmt.Sprintf("ERR invalid longitude,latitude pair %.6f,%.6f", lon, lat))
+			return
+		}
+		members = append(members, storage.ZMember{
+			Member: string(rest[i+2]),
+			Score:  float64(geohashEncode52(lat, lon)),
+		})
 		memberBytes = append(memberBytes, rest[i+2])
 	}
 
@@ -93,8 +103,7 @@ func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte
 		r.writeStoreError(c, err)
 		return
 	}
-
-	added, err := r.Storage.Geo.GeoAdd(ctx, pk, members)
+	added, err := r.Storage.Store.ZAdd(ctx, pk, members)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -107,9 +116,17 @@ func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte
 	w.Int(int64(added))
 }
 
-// handleGeoDist implements GEODIST key member1 member2 [unit]. Replies the
-// distance as a bulk string, or the null bulk string when either member is
-// missing.
+// memberPos resolves a member's stored geohash score to its (lat, lon) centre.
+func (r *Router) memberPos(ctx context.Context, pk, member string) (lat, lon float64, found bool, err error) {
+	score, ok, serr := r.Storage.Store.ZScore(ctx, pk, member)
+	if serr != nil || !ok {
+		return 0, 0, false, serr
+	}
+	lat, lon = geohashDecode52(uint64(score))
+	return lat, lon, true, nil
+}
+
+// handleGeoDist implements GEODIST key member1 member2 [unit].
 func (r *Router) handleGeoDist(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	if len(args) > 5 {
@@ -120,91 +137,90 @@ func (r *Router) handleGeoDist(ctx context.Context, c *server.Conn, args [][]byt
 	if len(args) == 5 {
 		u, ok := parseGeoUnit(args[4])
 		if !ok {
-			w.Error(resp.ErrSyntax)
+			w.Error(errGeoUnit)
 			return
 		}
 		unit = u
 	}
 
 	pk := encodePK(c.DB(), args[1])
-	if wt, err := r.geoWrongType(ctx, c, pk); err != nil || wt {
+	if done := r.geoWrongType(ctx, c, pk); done {
 		return
 	}
 
-	dist, ok, err := r.Storage.Geo.GeoDist(ctx, pk, string(args[2]), string(args[3]), unit)
+	lat1, lon1, ok1, err := r.memberPos(ctx, pk, string(args[2]))
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
-	if !ok {
+	lat2, lon2, ok2, err := r.memberPos(ctx, pk, string(args[3]))
+	if err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	if !ok1 || !ok2 {
 		w.NullBulk()
 		return
 	}
+	dist := geoHaversine(lat1, lon1, lat2, lon2) / unit
 	w.BulkString([]byte(strconv.FormatFloat(dist, 'f', 4, 64)))
 }
 
-// handleGeoPos implements GEOPOS key member [member ...]. Replies an array with
-// one entry per requested member: a two-element [longitude, latitude] array when
-// present, or a null array when missing.
+// handleGeoPos implements GEOPOS key member [...].
 func (r *Router) handleGeoPos(ctx context.Context, c *server.Conn, args [][]byte) {
 	pk := encodePK(c.DB(), args[1])
-	if wt, err := r.geoWrongType(ctx, c, pk); err != nil || wt {
+	if done := r.geoWrongType(ctx, c, pk); done {
 		return
 	}
 
-	names := bytesToStrings(args[2:])
-	locs, err := r.Storage.Geo.GeoPos(ctx, pk, names)
-	if err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
-
+	names := args[2:]
 	buf := resp.AppendArrayHeader(nil, len(names))
 	for _, name := range names {
-		p, ok := locs[name]
-		if !ok {
+		lat, lon, found, err := r.memberPos(ctx, pk, string(name))
+		if err != nil {
+			r.writeStoreError(c, err)
+			return
+		}
+		if !found {
 			buf = resp.AppendNullArray(buf)
 			continue
 		}
 		buf = resp.AppendArrayHeader(buf, 2)
-		buf = resp.AppendBulkString(buf, []byte(formatGeoCoord(p.Lon)))
-		buf = resp.AppendBulkString(buf, []byte(formatGeoCoord(p.Lat)))
+		buf = resp.AppendBulkString(buf, []byte(formatGeoCoord(lon)))
+		buf = resp.AppendBulkString(buf, []byte(formatGeoCoord(lat)))
 	}
 	c.Redcon().WriteRaw(buf)
 }
 
-// handleGeoHash implements GEOHASH key member [member ...]. Replies an array of
-// geohash strings (null bulk for a missing member).
+// handleGeoHash implements GEOHASH key member [...].
 func (r *Router) handleGeoHash(ctx context.Context, c *server.Conn, args [][]byte) {
 	pk := encodePK(c.DB(), args[1])
-	if wt, err := r.geoWrongType(ctx, c, pk); err != nil || wt {
+	if done := r.geoWrongType(ctx, c, pk); done {
 		return
 	}
 
-	names := bytesToStrings(args[2:])
-	hashes, err := r.Storage.Geo.GeoHash(ctx, pk, names)
-	if err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
-
+	names := args[2:]
 	buf := resp.AppendArrayHeader(nil, len(names))
 	for _, name := range names {
-		if h, ok := hashes[name]; ok {
-			buf = resp.AppendBulkString(buf, []byte(h))
-		} else {
-			buf = resp.AppendNullBulk(buf)
+		lat, lon, found, err := r.memberPos(ctx, pk, string(name))
+		if err != nil {
+			r.writeStoreError(c, err)
+			return
 		}
+		if !found {
+			buf = resp.AppendNullBulk(buf)
+			continue
+		}
+		buf = resp.AppendBulkString(buf, []byte(geohashStandard11(lat, lon)))
 	}
 	c.Redcon().WriteRaw(buf)
 }
 
-// geoRadiusOptions holds the parsed GEORADIUS trailer.
 type geoRadiusOptions struct {
 	withCoord bool
 	withDist  bool
 	withHash  bool
-	count     int // 0 = unlimited
+	count     int
 	sortAsc   bool
 	sortDesc  bool
 }
@@ -234,7 +250,7 @@ func parseGeoRadiusOptions(rest [][]byte) (geoRadiusOptions, bool) {
 			o.count = n
 			i++
 		default:
-			// STORE / STOREDIST and any unknown token are not supported in v1.
+			// STORE / STOREDIST and unknown tokens are not supported.
 			return o, false
 		}
 	}
@@ -260,7 +276,7 @@ func (r *Router) handleGeoRadius(ctx context.Context, c *server.Conn, args [][]b
 	}
 	unit, ok := parseGeoUnit(args[5])
 	if !ok {
-		w.Error(resp.ErrSyntax)
+		w.Error(errGeoUnit)
 		return
 	}
 	opts, ok := parseGeoRadiusOptions(args[6:])
@@ -270,17 +286,10 @@ func (r *Router) handleGeoRadius(ctx context.Context, c *server.Conn, args [][]b
 	}
 
 	pk := encodePK(c.DB(), args[1])
-	if wt, err := r.geoWrongType(ctx, c, pk); err != nil || wt {
+	if done := r.geoWrongType(ctx, c, pk); done {
 		return
 	}
-
-	center := storage.GeoPoint{Lon: lon, Lat: lat}
-	locs, err := r.Storage.Geo.GeoRadius(ctx, pk, center, radius, unit, opts.count)
-	if err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
-	r.writeGeoRadiusReply(c, center, unit, locs, opts)
+	r.geoRadiusReply(ctx, c, pk, lat, lon, radius*unit, unit, opts)
 }
 
 func (r *Router) handleGeoRadiusByMember(ctx context.Context, c *server.Conn, args [][]byte) {
@@ -292,7 +301,7 @@ func (r *Router) handleGeoRadiusByMember(ctx context.Context, c *server.Conn, ar
 	}
 	unit, ok := parseGeoUnit(args[4])
 	if !ok {
-		w.Error(resp.ErrSyntax)
+		w.Error(errGeoUnit)
 		return
 	}
 	opts, ok := parseGeoRadiusOptions(args[5:])
@@ -302,48 +311,46 @@ func (r *Router) handleGeoRadiusByMember(ctx context.Context, c *server.Conn, ar
 	}
 
 	pk := encodePK(c.DB(), args[1])
-	if wt, err := r.geoWrongType(ctx, c, pk); err != nil || wt {
+	if done := r.geoWrongType(ctx, c, pk); done {
 		return
 	}
-
-	member := string(args[2])
-	// The center is the member's own position; resolve it so WITHDIST/ASC/DESC use
-	// the same reference as the query.
-	centers, err := r.Storage.Geo.GeoPos(ctx, pk, []string{member})
+	lat, lon, found, err := r.memberPos(ctx, pk, string(args[2]))
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
-	center, present := centers[member]
-	if !present {
-		// Redis replies an error when the reference member is missing.
+	if !found {
 		w.Error("ERR could not decode requested zset member")
 		return
 	}
+	r.geoRadiusReply(ctx, c, pk, lat, lon, radius*unit, unit, opts)
+}
 
-	locs, err := r.Storage.Geo.GeoRadiusByMember(ctx, pk, member, radius, unit, opts.count)
+type geoResult struct {
+	member string
+	lat    float64
+	lon    float64
+	score  uint64
+	dist   float64 // in the query unit
+}
+
+// geoRadiusReply reads every member, keeps those within radiusMeters of the
+// centre (exact haversine, the same set Redis returns), and writes the reply.
+func (r *Router) geoRadiusReply(ctx context.Context, c *server.Conn, pk string, centerLat, centerLon, radiusMeters, unit float64, o geoRadiusOptions) {
+	all, err := r.Storage.Store.ZRangeByRank(ctx, pk, 0, -1, false)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
-	r.writeGeoRadiusReply(c, center, unit, locs, opts)
-}
 
-// geoResult pairs a member with its position and distance for ordering.
-type geoResult struct {
-	member string
-	pos    storage.GeoPoint
-	dist   float64 // in the query unit
-}
-
-func (r *Router) writeGeoRadiusReply(c *server.Conn, center storage.GeoPoint, unit float64, locs map[string]storage.GeoPoint, o geoRadiusOptions) {
-	results := make([]geoResult, 0, len(locs))
-	for name, p := range locs {
-		results = append(results, geoResult{
-			member: name,
-			pos:    p,
-			dist:   geoDistance(center, p) / unit,
-		})
+	results := make([]geoResult, 0)
+	for _, m := range all {
+		score := uint64(m.Score)
+		plat, plon := geohashDecode52(score)
+		d := geoHaversine(centerLat, centerLon, plat, plon)
+		if d <= radiusMeters {
+			results = append(results, geoResult{member: m.Member, lat: plat, lon: plon, score: score, dist: d / unit})
+		}
 	}
 
 	if o.sortAsc || o.sortDesc {
@@ -353,10 +360,6 @@ func (r *Router) writeGeoRadiusReply(c *server.Conn, center storage.GeoPoint, un
 			}
 			return results[i].dist < results[j].dist
 		})
-	} else {
-		// Redis' unsorted order is unspecified; a stable member order keeps the
-		// reply deterministic.
-		sort.SliceStable(results, func(i, j int) bool { return results[i].member < results[j].member })
 	}
 	if o.count > 0 && o.count < len(results) {
 		results = results[:o.count]
@@ -385,93 +388,42 @@ func (r *Router) writeGeoRadiusReply(c *server.Conn, center storage.GeoPoint, un
 			buf = resp.AppendBulkString(buf, []byte(strconv.FormatFloat(res.dist, 'f', 4, 64)))
 		}
 		if o.withHash {
-			buf = resp.AppendInt(buf, int64(encodeGeohash52(res.pos.Lat, res.pos.Lon)))
+			buf = resp.AppendInt(buf, int64(res.score))
 		}
 		if o.withCoord {
 			buf = resp.AppendArrayHeader(buf, 2)
-			buf = resp.AppendBulkString(buf, []byte(formatGeoCoord(res.pos.Lon)))
-			buf = resp.AppendBulkString(buf, []byte(formatGeoCoord(res.pos.Lat)))
+			buf = resp.AppendBulkString(buf, []byte(formatGeoCoord(res.lon)))
+			buf = resp.AppendBulkString(buf, []byte(formatGeoCoord(res.lat)))
 		}
 	}
 	c.Redcon().WriteRaw(buf)
 }
 
-// geoWrongType checks that pk is absent/expired or a zset; a live non-zset key
-// replies WRONGTYPE. Returns wrongType=true (reply already written) or an error.
-func (r *Router) geoWrongType(ctx context.Context, c *server.Conn, pk string) (bool, error) {
+// geoWrongType replies WRONGTYPE for a live non-zset key (a GEO key is a zset).
+// Returns true when a reply (WRONGTYPE or a store error) was already written.
+func (r *Router) geoWrongType(ctx context.Context, c *server.Conn, pk string) bool {
 	_, _, wrongType, err := r.zsetState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
-		return true, err
+		return true
 	}
 	if wrongType {
 		resp.NewWriter(c.Redcon()).Error(resp.ErrWrongType)
-		return true, nil
+		return true
 	}
-	return false, nil
+	return false
 }
 
+// formatGeoCoord renders a coordinate the way Redis' GEOPOS does: 17 digits after
+// the decimal point (matching "%.17Lf" on the double promoted to long double),
+// with trailing zeros — and a bare trailing '.' — stripped (ld2string,
+// humanfriendly). The stored value is a float64, so the 17-place rendering is
+// identical to Redis' before stripping.
 func formatGeoCoord(v float64) string {
-	return strconv.FormatFloat(v, 'f', 17, 64)
-}
-
-// geoDistance returns the great-circle distance in metres between two points
-// using the haversine formula and Redis' earth radius constant.
-func geoDistance(a, b storage.GeoPoint) float64 {
-	lat1 := a.Lat * math.Pi / 180
-	lat2 := b.Lat * math.Pi / 180
-	dLat := (b.Lat - a.Lat) * math.Pi / 180
-	dLon := (b.Lon - a.Lon) * math.Pi / 180
-	h := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(lat1)*math.Cos(lat2)*math.Sin(dLon/2)*math.Sin(dLon/2)
-	return 2 * earthRadiusMeters * math.Asin(math.Sqrt(h))
-}
-
-// Redis GEO geohash bounds (Web-Mercator latitude clamp).
-const (
-	geoLatMin  = -85.05112878
-	geoLatMax  = 85.05112878
-	geoLonMin  = -180.0
-	geoLonMax  = 180.0
-	geoStepBits = 26
-)
-
-// encodeGeohash52 computes Redis' 52-bit interleaved geohash for WITHHASH. It
-// matches Redis' geohashEncode: normalise lat/lon into their ranges, scale to 26
-// bits each and Morton-interleave (lat in the low bit).
-func encodeGeohash52(lat, lon float64) uint64 {
-	if lat < geoLatMin {
-		lat = geoLatMin
-	} else if lat > geoLatMax {
-		lat = geoLatMax
+	s := strconv.FormatFloat(v, 'f', 17, 64)
+	if strings.ContainsRune(s, '.') {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimRight(s, ".")
 	}
-	latOffset := (lat - geoLatMin) / (geoLatMax - geoLatMin)
-	lonOffset := (lon - geoLonMin) / (geoLonMax - geoLonMin)
-	ilat := uint32(latOffset * float64(uint64(1)<<geoStepBits))
-	ilon := uint32(lonOffset * float64(uint64(1)<<geoStepBits))
-	return interleave64(ilat, ilon)
-}
-
-// interleave64 Morton-interleaves two 32-bit values into a 64-bit value (x bits at
-// even positions, y bits at odd positions), matching Redis' interleave64.
-func interleave64(xlo, ylo uint32) uint64 {
-	B := [...]uint64{
-		0x5555555555555555, 0x3333333333333333,
-		0x0F0F0F0F0F0F0F0F, 0x00FF00FF00FF00FF,
-		0x0000FFFF0000FFFF,
-	}
-	S := [...]uint{1, 2, 4, 8, 16}
-	x := uint64(xlo)
-	y := uint64(ylo)
-	x = (x | (x << S[4])) & B[4]
-	x = (x | (x << S[3])) & B[3]
-	x = (x | (x << S[2])) & B[2]
-	x = (x | (x << S[1])) & B[1]
-	x = (x | (x << S[0])) & B[0]
-	y = (y | (y << S[4])) & B[4]
-	y = (y | (y << S[3])) & B[3]
-	y = (y | (y << S[2])) & B[2]
-	y = (y | (y << S[1])) & B[1]
-	y = (y | (y << S[0])) & B[0]
-	return x | (y << 1)
+	return s
 }

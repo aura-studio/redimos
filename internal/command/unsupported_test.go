@@ -47,17 +47,6 @@ func representativeArgs(cmd string) string {
 		return "k 0"
 	case "BRPOPLPUSH":
 		return "src dst 0"
-	// GEO.
-	case "GEOADD":
-		return "geo 13.36 38.11 palermo"
-	case "GEODIST":
-		return "geo a b"
-	case "GEOPOS", "GEOHASH":
-		return "geo a"
-	case "GEORADIUS":
-		return "geo 15 37 200 km"
-	case "GEORADIUSBYMEMBER":
-		return "geo a 200 km"
 	// Streams.
 	case "XADD":
 		return "s * f v"
@@ -140,10 +129,9 @@ func TestUnsupportedCommandsAreErrorRepliesNotDowngrade(t *testing.T) {
 		"SUBSCRIBE": "chan",        // 4.1 Pub/Sub
 		"PUBLISH":   "chan msg",    // 4.1 Pub/Sub
 		"EVAL":      "return 1 0",  // 4.2 Lua
-		"MULTI":     "",            // 4.3 transactions
-		"BLPOP":     "k 0",         // 4.4 blocking
-		"GEOADD":    "geo 13 38 m", // 4.6 GEO
-		"XADD":      "s * f v",     // 4.6 Streams
+		"MULTI":     "",           // 4.3 transactions
+		"BLPOP":     "k 0",        // 4.4 blocking
+		"XADD":      "s * f v",    // 4.6 Streams
 	}
 
 	for name, args := range perFamily {
