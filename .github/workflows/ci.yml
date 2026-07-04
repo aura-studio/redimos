@@ -13,10 +13,9 @@ name: CI
 # 需求: 术语表 Redimo_Store
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+  # Automatic runs on push / pull_request are disabled; run manually from the
+  # Actions tab (workflow_dispatch) when needed.
+  workflow_dispatch:
 
 env:
   # redimo fork pinned reference (LOCKED commit = tag v2.0.1 on the v2.0 branch).
