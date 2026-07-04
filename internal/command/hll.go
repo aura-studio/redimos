@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 
 	"github.com/aura-studio/redimos/v2/internal/guard"
@@ -47,6 +48,82 @@ func (r *Router) registerHLL() {
 	t.Register("PFADD", -2, true, r.handlePFAdd)
 	t.Register("PFCOUNT", -2, false, r.handlePFCount)
 	t.Register("PFMERGE", -2, true, r.handlePFMerge)
+	t.Register("PFDEBUG", -3, false, r.handlePFDebug)
+}
+
+// handlePFDebug implements PFDEBUG <subcommand> <key> (a port of Redis 3.2's
+// pfdebugCommand). It inspects the stored "HYLL" String blob:
+//   - GETREG   -> the 16384 dense register values (byte-identical to Redis, since
+//     the registers are representation-independent).
+//   - ENCODING -> "dense" (redimos always stores the dense encoding).
+//   - TODENSE  -> :0 (already dense; no conversion happens).
+//   - DECODE   -> the sparse-opcode dump, which only exists for the sparse
+//     encoding; on redimos' always-dense blob it errors like Redis on a dense HLL.
+//
+// ENCODING/TODENSE/DECODE are therefore only approximately Redis-compatible: Redis
+// keeps small-cardinality HLLs sparse, so for those it would report "sparse" /
+// convert / decode where redimos reports dense. GETREG matches exactly.
+func (r *Router) handlePFDebug(ctx context.Context, c *server.Conn, args [][]byte) {
+	w := resp.NewWriter(c.Redcon())
+	sub := toLower(string(args[1]))
+	pk := encodePK(c.DB(), args[2])
+
+	cur, found, wrongType, err := r.readCurrentString(ctx, pk)
+	if err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	if wrongType {
+		w.Error(resp.ErrWrongType)
+		return
+	}
+	if !found {
+		w.Error("ERR The specified key does not exist")
+		return
+	}
+	if !isHLL(cur) {
+		w.Error(errHLLWrongTypeText)
+		return
+	}
+	regs := cur[hllHdrSize:]
+
+	switch sub {
+	case "getreg":
+		if len(args) != 3 {
+			w.Error(pfdebugUnknownErr(args[1]))
+			return
+		}
+		buf := resp.AppendArrayHeader(nil, hllRegisters)
+		for j := 0; j < hllRegisters; j++ {
+			buf = resp.AppendInt(buf, int64(denseGetRegister(regs, j)))
+		}
+		c.Redcon().WriteRaw(buf)
+	case "encoding":
+		if len(args) != 3 {
+			w.Error(pfdebugUnknownErr(args[1]))
+			return
+		}
+		// redimos always writes the dense encoding.
+		w.SimpleString("dense")
+	case "todense":
+		if len(args) != 3 {
+			w.Error(pfdebugUnknownErr(args[1]))
+			return
+		}
+		// Already dense: zero conversions.
+		w.Int(0)
+	case "decode":
+		// DECODE only applies to the sparse encoding; the stored blob is dense.
+		w.Error("ERR HLL encoding is not sparse")
+	default:
+		w.Error(pfdebugUnknownErr(args[1]))
+	}
+}
+
+// pfdebugUnknownErr matches Redis' error for an unknown PFDEBUG subcommand or a
+// wrong argument count, echoing the subcommand as the client sent it.
+func pfdebugUnknownErr(sub []byte) string {
+	return fmt.Sprintf("ERR Unknown PFDEBUG subcommand or wrong number of arguments for '%s'", string(sub))
 }
 
 // handlePFAdd implements PFADD key [element ...]. Replies :1 if at least one

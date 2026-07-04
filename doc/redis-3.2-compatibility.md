@@ -15,7 +15,7 @@
 
 | 维度 | 状态 |
 |---|---|
-| 命令覆盖 | 174 条中 **113 条经 redimo 存储支持**（含 v1.5/v1.8 GEO+`_ro`、v1.6 BIT、v1.7 HLL 家族）；**35 条代理拒绝**（KEYS/RENAME/FLUSH + v1.10 的发布订阅/Lua/事务/阻塞 + v1.11–1.14 把所有「3.2 里真实存在但故意拒」的命令上移为代理拒绝）；**15 条不支持**（未知命令路径：Streams + 复制/持久化/自省，见 §11 评估）；其余为连接/桩控制面 |
+| 命令覆盖 | 174 条中 **114 条经 redimo 存储支持**（含 GEO+`_ro`、BIT、HLL+`PFDEBUG`）；**35 条代理拒绝**（KEYS/RENAME/FLUSH + 发布订阅/Lua/事务/阻塞 + v1.11–1.14 所有「3.2 里真实存在但故意拒」的命令）；**14 条连接/桩**（含 v1.15 的 SAVE/BGSAVE/BGREWRITEAOF/LASTSAVE/ROLE/WAIT/PFSELFTEST 固定回复桩）；**仅剩 7 条不支持**（未知命令路径，全是架构不可能项：`sync`/`psync`/`slaveof`/`dump`/`restore`/`restore-asking`/`migrate`，见 §11） |
 | **字符/字节安全** | ✅ **完全对齐**：key、string 值、hash 字段名/值、set/zset 成员、list 元素对 0x00–0xff 全部 256 个字节值与 Redis 一致，无碰撞（v2.0.1 起） |
 | **并发原子性** | ⚠️ **部分等同**：单项读改写（INCR/HINCRBY/APPEND…）、分值自增、**SET NX/SETNX（v1.9.0 起）**已原子；其余多项/多步写（S\*STORE、Z\*STORE、SMOVE、RPOPLPUSH、部分写可见性）**非原子**——受 DynamoDB 单事务 100 项上限所限，大结果集无法完全等同 Redis 单线程模型 |
 | 差分（单连接） | 大量命令字节一致；残余差异见 §4 |
@@ -47,6 +47,7 @@
 | redimos **v1.12.0** | **READONLY** → 代理拒绝（Cluster replica 只读服务开关，非 cluster 代理无 replica/slot 可切换；standalone Redis 3.2 原版回 `ERR This instance has cluster support disabled`，redimos 用统一代理风格消息）。代理拒绝 25 / 不支持 25 |
 | redimos **v1.13.0** | **READWRITE**（READONLY 的反向，清除只读标志）、**REPLCONF**（master↔replica 复制子协议）→ 代理拒绝。注：REPLCONF 属 §11「架构上不可能实现」档，但仍**注册专属拒绝**而非落未知命令——处置(拒绝) 与 可实现性(不可能) 是两码事。代理拒绝 27 / 不支持 23 |
 | redimos **v1.14.0** | **RANDOMKEY / MOVE / SORT / OBJECT / MONITOR / CLUSTER / LATENCY / DEBUG** → 代理拒绝（各带专属消息）。至此 §11「宜代理拒绝」桶 12 条**全部落地**。代理拒绝 35 / 不支持 15 |
+| redimos **v1.15.0** | **7 个固定回复桩**（`SAVE`→+OK / `BGSAVE` / `BGREWRITEAOF` / `LASTSAVE`→当前秒 / `ROLE`→master 形态 / `WAIT`→:0 / `PFSELFTEST`→+OK，实测与 3.2 稳态一致）+ **实现 `PFDEBUG`**（GETREG/ENCODING/TODENSE/DECODE；**GETREG 实测字节兼容**：N=20 稀疏、N=5000 稠密两端 md5 一致）。经 redimo 114 / 桩 14 / 不支持仅剩 7（全是架构不可能项） |
 
 ---
 
@@ -179,12 +180,12 @@ HyperLogLog 是存在 Redis String 里的 "HYLL" blob;和 BIT 一样 **纯命令
 
 | 档 | 数量 | 命令 | 建议 |
 |---|---|---|---|
-| **真能实现** | 1 | `pfdebug` | HYLL blob 已作 String 存着，命令层解包 16384×6-bit 寄存器即可（同 BIT/HLL 做法）；仅 approx（redimos 恒 DENSE 编码）。价值窄，可押后 |
-| **固定回复即正确（stub）** | 7 | `save`→`+OK` · `bgsave`→`+Background saving started` · `bgrewriteaof`→`+Background append only file rewriting started` · `lastsave`→`:<当前秒>` · `role`→master 形态 · `wait`→`:0` · `pfselftest`→`+OK` | **推荐做**：零 DynamoDB 交互、零并发隐患，让标准客户端/框架（写后 `WAIT`、连接自检等）不再撞未知命令 |
+| **真能实现** | 1 | ✅ `pfdebug`（v1.15.0） | 命令层解包 HYLL 的 16384×6-bit 寄存器。**GETREG 实测字节兼容**（Redis 稀疏/稠密两端一致）；ENCODING/TODENSE/DECODE 因 redimos 恒 DENSE 对 Redis 稀疏态 approx |
+| **固定回复即正确（stub）** | 7（✅ **全部落地**，v1.15.0） | ✅ `save`→`+OK` · ✅ `bgsave`→`+Background saving started` · ✅ `bgrewriteaof`→`+Background append only file rewriting started` · ✅ `lastsave`→`:<当前秒>` · ✅ `role`→`[master,0,[]]` · ✅ `wait`→`:0` · ✅ `pfselftest`→`+OK`（均实测与 3.2 稳态一致） | 零 DynamoDB 交互、零并发隐患，让标准客户端/框架（写后 `WAIT`、连接自检等）不再撞未知命令 |
 | **代理拒绝（3.2 里有但故意拒）** | 12（✅ **全部落地**） | ✅ `shutdown`（多租户 DoS，v1.11.0）· ✅ `asking`（Cluster 语义，v1.11.0）· ✅ `readonly`（v1.12.0）· ✅ `readwrite`（v1.13.0）· ✅ `randomkey`（无界全扫，同 KEYS）· ✅ `move`（整集合迁移非原子，同 RENAME）· ✅ `sort`（`BY/GET` 无界扇出 + `STORE` 非原子）· ✅ `object`（暴露 Redis 内部编码）· ✅ `monitor`（需跨连接命令总线）· ✅ `cluster`（纯 Cluster 语义）· ✅ `latency`（有状态进程内监控）· ✅ `debug`（多子命令，含 SEGFAULT 真崩）—— 均 v1.14.0 | 已全部注册专属拒绝错误（同 KEYS/RENAME/FLUSH），比未知命令更利于客户端识别 |
 | **架构上不可能** | 8（✅ 已落地 1） | ✅ `replconf`（复制子协议，v1.13.0 起代理拒绝）· `dump`/`restore`/`restore-asking`（需 Redis 内部 RDB 序列化+CRC64）· `migrate`（需另一个真 Redis）· `sync`/`psync`（需把数据集 dump 成 RDB blob 流式复制）· `slaveof`（需复制 backlog/主从链路） | **可实现性 ≠ 处置**：这些实现不了，但仍可选择注册「代理拒绝」（专属消息）而非落未知命令。`replconf` 即按此处理 |
 
-**一句话结论**：能真正实现的只有 `pfdebug` 一个；真正该现在做的是 **7 个固定回复 stub**；其余要么故意拒、要么架构上不可能——但即使「不可能实现」的,也可以按需从「未知命令」上移到「代理拒绝」(给专属消息),二者是正交的。**这就是 DynamoDB 无状态代理的天花板**。
+**一句话结论（v1.15.0 后）**：评估里「真能实现」(pfdebug) 与「7 个固定回复 stub」**已全部落地**；「宜代理拒绝」12 条也已全落地。**未知命令路径现在只剩 7 条架构不可能项**（`sync`/`psync`/`slaveof`/`dump`/`restore`/`restore-asking`/`migrate`）——它们要么要 Redis 内部 RDB 格式、要么要另一个真 Redis、要么要复制 backlog/主从链路,**这就是 DynamoDB 无状态代理的天花板**。若愿意,这 7 条也可像 `replconf` 那样从「未知命令」上移到「代理拒绝」(处置与可实现性正交),但收益仅是错误消息更友好。
 
 > 评审方法：4 个评审 agent 分组给判定 + 4 个对抗 agent 逐条反驳「能实现/可 stub」的主张 + 1 个综合。`sort` 即被对抗评审从「能实现」下调为「代理拒绝」（裸 SORT 机械可拼，但 `BY/GET` 无界、`STORE` 非原子、byteCompat 仅 approx）。
 

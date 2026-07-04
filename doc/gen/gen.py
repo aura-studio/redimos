@@ -13,11 +13,22 @@ zadd zscore zincrby zcard zcount zrange zrevrange zrangebyscore zrevrangebyscore
 scan'''.split())
 conn = set('auth ping echo quit select'.split())
 stub = set('command info dbsize config client slowlog time'.split())
+# Server persistence/replication no-op stubs (v1.15.0): fixed benign reply, no
+# storage interaction.
+stub_extra = {
+    'save':         '桩：DynamoDB 即持久层，无 RDB 可存 → 固定 +OK（v1.15.0）',
+    'bgsave':       '桩：无 RDB/fork → 固定 +Background saving started（v1.15.0）',
+    'bgrewriteaof': '桩：无 AOF → 固定 +Background append only file rewriting started（v1.15.0）',
+    'lastsave':     '桩：无 RDB，回 router 时钟当前秒（v1.15.0）',
+    'role':         '桩：standalone 诚实回 master 形态 [master,0,[]]（v1.15.0）',
+    'wait':         '桩：无 Redis 副本(DynamoDB 已持久) → 固定 :0（v1.15.0）',
+    'pfselftest':   '桩：HLL 自检可观测契约即 +OK → 固定 +OK（v1.15.0）',
+}
 reject = set('keys rename renamenx flushall flushdb'.split())
 pubsub = set('subscribe unsubscribe psubscribe punsubscribe publish pubsub'.split())
 script = set('eval evalsha script'.split())
 txn = set('multi exec discard watch unwatch'.split())
-admin = set('bgrewriteaof bgsave save lastsave slaveof wait pfselftest role sync psync'.split())
+admin = set('slaveof sync psync'.split())
 # Individual real-Redis-3.2 commands promoted from unsupported to proxy-reject as the
 # maintainer converts them one by one (each with its own dedicated message).
 reject_extra = {
@@ -41,7 +52,9 @@ bit_new = set('setbit getbit bitcount bitop bitpos bitfield'.split())
 bit = set()
 # PFADD/PFCOUNT/PFMERGE implemented (v1.7.0); pfdebug stays unsupported (debug).
 hll_new = set('pfadd pfcount pfmerge'.split())
-hll = set('pfdebug'.split())
+hll = set()
+# PFDEBUG implemented (v1.15.0): command-layer unpack of the HYLL register blob.
+newly_pfdebug = set('pfdebug'.split())
 # The 6 base GEO commands are implemented (v1.5.0; rewritten byte-compatible in
 # v1.8.0 as a zset with a 52-bit geohash score); the read-only _ro variants
 # (Redis 3.2.10+) are not registered.
@@ -57,7 +70,7 @@ newly_geo = geonew  # v1.5.0
 newly_bit = bit_new  # v1.6.0
 newly_hll = hll_new  # v1.7.0
 newly_geo_ro = geo  # v1.10.0: GEORADIUS_RO / GEORADIUSBYMEMBER_RO (aliases of the base GEO commands)
-via = via | newly | newly_geo | newly_bit | newly_hll | newly_geo_ro
+via = via | newly | newly_geo | newly_bit | newly_hll | newly_geo_ro | newly_pfdebug
 notimpl = set()
 
 listcmds = set('lpush rpush lpushx rpushx lpop rpop llen lrange lindex lset linsert lrem ltrim rpoplpush'.split())
@@ -69,7 +82,7 @@ def fam(n):
             return 'geo'
         if n in ('setbit','getbit','bitcount','bitpos','bitop','bitfield'):
             return 'bit'
-        if n in ('pfadd','pfcount','pfmerge'):
+        if n in ('pfadd','pfcount','pfmerge','pfdebug'):
             return 'hll'
         if n[0] == 'h':
             return 'hash'
@@ -101,6 +114,8 @@ for n, ar, s, fk in rows:
             reason = '✓ 新增 v1.4.0 → 经 redimo'
         elif n in newly_geo_ro:
             reason = '✓ 新增 v1.10.0 → GEORADIUS_RO/GEORADIUSBYMEMBER_RO 只读变体，别名到已实现的 GEO 命令（禁 STORE/STOREDIST）'
+        elif n in newly_pfdebug:
+            reason = '✓ 新增 v1.15.0 → PFDEBUG GETREG/ENCODING/TODENSE/DECODE，命令层解包 HYLL 寄存器（GETREG 字节兼容；redimos 恒 DENSE，其余对 Redis 稀疏态 approx）'
         else:
             reason = '数据/键状态读写 → 经 redimo 映射到 DynamoDB'
     elif n in conn:
@@ -108,6 +123,8 @@ for n, ar, s, fk in rows:
     elif n in stub:
         disp, need = 'stub', '否'
         reason = '服务器自省，固定/内存态回答' + ('；键计数用 :0 桩不扫表' if n == 'dbsize' else '')
+    elif n in stub_extra:
+        disp, need, reason = 'stub', '否', stub_extra[n]
     elif n in reject:
         disp, need = 'proxy-reject', '否'
         if n == 'keys':

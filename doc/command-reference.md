@@ -8,16 +8,16 @@
 
 | 处置 | 数量 | 说明 |
 |---|---:|---|
-| **经 redimo** | 113 | 数据/键状态读写，真正打 DynamoDB |
-| 桩 | 7 | 固定/内存态回答（如 DBSIZE→`:0`），不碰键空间 |
+| **经 redimo** | 114 | 数据/键状态读写，真正打 DynamoDB |
+| 桩 | 14 | 固定/内存态回答（如 DBSIZE→`:0`），不碰键空间 |
 | 连接 | 4 | 仅连接状态（AUTH/SELECT/PING/ECHO） |
 | 代理拒绝 | 35 | 定制拒绝（KEYS/RENAME） |
-| 不支持 | 15 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
-| **合计** | 174 | 其中 113 需要 redimo |
+| 不支持 | 7 | 未知命令路径（是数据命令但 redimos 未支持/超范围） |
+| **合计** | 174 | 其中 114 需要 redimo |
 
 近期在 v1.4.0 新增并经 redimo 的命令（此前为「不支持」）：**MSETNX · SUBSTR · TOUCH · ZLEXCOUNT · ZREMRANGEBYLEX**。
 
-## 需要 redimo（数据面，经存储层） — 113 条
+## 需要 redimo（数据面，经存储层） — 114 条
 
 数据与键的元信息（类型/TTL/计数）都存在 DynamoDB，这些命令必须读/写它。
 
@@ -134,22 +134,30 @@
 | `getbit` | `rF` | 1 | 是 | bit | 是 | **✓** 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子） |
 | `pfadd` | `wmF` | 1 | 是 | hll | 是 | **✓** 新增 v1.7.0 → 经 redimo（HLL；PFCOUNT 低基数字节一致、高基数在误差内） |
 | `pfcount` | `r` | 1 | 是 | hll | 是 | **✓** 新增 v1.7.0 → 经 redimo（HLL；PFCOUNT 低基数字节一致、高基数在误差内） |
+| `pfdebug` | `w` | 0 | 是 | hll | 是 | **✓** 新增 v1.15.0 → PFDEBUG GETREG/ENCODING/TODENSE/DECODE，命令层解包 HYLL 寄存器（GETREG 字节兼容；redimos 恒 DENSE，其余对 Redis 稀疏态 approx） |
 | `pfmerge` | `wm` | 1 | 是 | hll | 是 | **✓** 新增 v1.7.0 → 经 redimo（HLL；PFCOUNT 低基数字节一致、高基数在误差内） |
 | `setbit` | `wm` | 1 | 是 | bit | 是 | **✓** 新增 v1.6.0 → 经 redimo（BIT，单键字节兼容；BITOP 多键非原子） |
 
-## 不需要 redimo — 桩 — 7 条
+## 不需要 redimo — 桩 — 14 条
 
 redimos 用固定或内存态回答，不访问 DynamoDB。
 
 | 命令 | sflags | firstkey | 键空间 | 家族 | 走 redimo | 原因 |
 |---|---|---:|:---:|---|:---:|---|
+| `bgrewriteaof` | `a` | 0 | 否 | — | 否 | 桩：无 AOF → 固定 +Background append only file rewriting started（v1.15.0） |
+| `bgsave` | `a` | 0 | 否 | — | 否 | 桩：无 RDB/fork → 固定 +Background saving started（v1.15.0） |
 | `client` | `as` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
 | `command` | `lt` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
 | `config` | `lat` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
 | `dbsize` | `rF` | 0 | 是 | — | 否 | 服务器自省，固定/内存态回答；键计数用 :0 桩不扫表 |
 | `info` | `lt` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
+| `lastsave` | `RF` | 0 | 否 | — | 否 | 桩：无 RDB，回 router 时钟当前秒（v1.15.0） |
+| `pfselftest` | `a` | 0 | 否 | — | 否 | 桩：HLL 自检可观测契约即 +OK → 固定 +OK（v1.15.0） |
+| `role` | `lst` | 0 | 否 | — | 否 | 桩：standalone 诚实回 master 形态 [master,0,[]]（v1.15.0） |
+| `save` | `as` | 0 | 否 | — | 否 | 桩：DynamoDB 即持久层，无 RDB 可存 → 固定 +OK（v1.15.0） |
 | `slowlog` | `a` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
 | `time` | `RF` | 0 | 否 | — | 否 | 服务器自省，固定/内存态回答 |
+| `wait` | `s` | 0 | 否 | — | 否 | 桩：无 Redis 副本(DynamoDB 已持久) → 固定 :0（v1.15.0） |
 
 ## 不需要 redimo — 连接层 — 4 条
 
@@ -204,24 +212,16 @@ redimos 用固定或内存态回答，不访问 DynamoDB。
 | `unwatch` | `sF` | 0 | 否 | — | 否 | 代理拒绝：事务需排队+原子应用多命令（v1.10.0 起专属拒绝） |
 | `watch` | `sF` | 1 | 否 | — | 否 | 代理拒绝：事务需排队+原子应用多命令（v1.10.0 起专属拒绝） |
 
-## 不经 redimo — 未支持（未知命令） — 15 条
+## 不经 redimo — 未支持（未知命令） — 7 条
 
 是 Redis 数据命令，但 redimos 在命令层就短路，不发起存储调用。
 
 | 命令 | sflags | firstkey | 键空间 | 家族 | 走 redimo | 原因 |
 |---|---|---:|:---:|---|:---:|---|
-| `bgrewriteaof` | `a` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
-| `bgsave` | `a` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `dump` | `r` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了/代价过高 |
-| `lastsave` | `RF` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `migrate` | `w` | 0 | 是 | — | 否 | 键管理：DynamoDB 表达不了/代价过高 |
-| `pfdebug` | `w` | 0 | 是 | — | 否 | HyperLogLog：可经命令层实现，尚未做（同 BIT） |
-| `pfselftest` | `a` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `psync` | `ars` | 0 | 是 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `restore` | `wm` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了/代价过高 |
 | `restore-asking` | `wmk` | 1 | 是 | — | 否 | 键管理：DynamoDB 表达不了/代价过高 |
-| `role` | `lst` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
-| `save` | `as` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `slaveof` | `ast` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
 | `sync` | `ars` | 0 | 是 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |
-| `wait` | `s` | 0 | 否 | — | 否 | 服务器/复制/管理：不适用于无状态代理 |

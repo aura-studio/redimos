@@ -63,6 +63,71 @@ func (r *Router) registerStubs() {
 	//   - SLOWLOG -2: always a subcommand (GET [count] / LEN / RESET).
 	t.Register("INFO", -1, false, r.handleInfo)
 	t.Register("SLOWLOG", -2, false, r.handleSlowlog)
+
+	// Server persistence / replication no-op stubs. redimos keeps no RDB/AOF
+	// (DynamoDB is the durable store, every write already persisted) and has no
+	// Redis replicas, so these reply the benign fixed value a standalone Redis
+	// would, keeping ops scripts and client frameworks (e.g. write-then-WAIT,
+	// connection self-checks) from failing on an unknown command.
+	//
+	// Arity notes (Redis 3.2 command-table convention, name counted):
+	//   - SAVE 1 · BGSAVE -1 (optional SCHEDULE) · BGREWRITEAOF 1 · LASTSAVE 1
+	//   - ROLE 1 · WAIT 3 (numreplicas timeout) · PFSELFTEST 1
+	t.Register("SAVE", 1, false, handleSave)
+	t.Register("BGSAVE", -1, false, handleBgSave)
+	t.Register("BGREWRITEAOF", 1, false, handleBgRewriteAOF)
+	t.Register("LASTSAVE", 1, false, r.handleLastSave)
+	t.Register("ROLE", 1, false, handleRole)
+	t.Register("WAIT", 3, false, handleWait)
+	t.Register("PFSELFTEST", 1, false, handlePFSelfTest)
+}
+
+// handleSave stubs SAVE. Real Redis synchronously snapshots to an RDB file; redimos
+// has no RDB and DynamoDB already persists every write, so "already saved" -> +OK.
+func handleSave(_ context.Context, c *server.Conn, _ [][]byte) {
+	resp.NewWriter(c.Redcon()).SimpleString("OK")
+}
+
+// handleBgSave stubs BGSAVE (with optional SCHEDULE). No fork/RDB to do; reply the
+// conventional status string real Redis returns when a background save begins.
+func handleBgSave(_ context.Context, c *server.Conn, _ [][]byte) {
+	resp.NewWriter(c.Redcon()).SimpleString("Background saving started")
+}
+
+// handleBgRewriteAOF stubs BGREWRITEAOF. redimos runs no AOF; reply Redis' status.
+func handleBgRewriteAOF(_ context.Context, c *server.Conn, _ [][]byte) {
+	resp.NewWriter(c.Redcon()).SimpleString("Background append only file rewriting started")
+}
+
+// handleLastSave stubs LASTSAVE, which returns the unix time of the last successful
+// RDB save. With no RDB but continuous DynamoDB persistence, the honest degenerate
+// answer is the current epoch second from the router clock.
+func (r *Router) handleLastSave(_ context.Context, c *server.Conn, _ [][]byte) {
+	resp.NewWriter(c.Redcon()).Int(r.now())
+}
+
+// handleRole stubs ROLE. A standalone instance honestly answers the master form:
+// ["master", <replication offset 0>, <empty replica list>].
+func handleRole(_ context.Context, c *server.Conn, _ [][]byte) {
+	buf := resp.AppendArrayHeader(nil, 3)
+	buf = resp.AppendBulkString(buf, []byte("master"))
+	buf = resp.AppendInt(buf, 0)
+	buf = resp.AppendEmptyArray(buf)
+	c.Redcon().WriteRaw(buf)
+}
+
+// handleWait stubs WAIT numreplicas timeout. A DynamoDB-backed proxy has zero Redis
+// replicas (and data is already durable), so the count of replicas that acknowledged
+// prior writes is genuinely 0 — the reply is a real value, not a placeholder.
+func handleWait(_ context.Context, c *server.Conn, _ [][]byte) {
+	resp.NewWriter(c.Redcon()).Int(0)
+}
+
+// handlePFSelfTest stubs PFSELFTEST. Redis' internal HyperLogLog self-test replies
+// +OK on success; the proxy has no native HLL internals to exercise, but its whole
+// observable contract is that +OK health signal.
+func handlePFSelfTest(_ context.Context, c *server.Conn, _ [][]byte) {
+	resp.NewWriter(c.Redcon()).SimpleString("OK")
 }
 
 // ensureObservability guarantees r.Storage.Slowlog is non-nil so the INFO and
