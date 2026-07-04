@@ -249,6 +249,7 @@ func run(cfg appConfig) error {
 		},
 		command.Storage{
 			Store:   store,
+			Geo:     store.(storage.GeoStore), // enables the GEO command family
 			Meta:    metaStore,
 			Reader:  reader,
 			Scan:    scanReg,

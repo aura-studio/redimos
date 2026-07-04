@@ -381,3 +381,71 @@ func (t *throttleStore) HScan(ctx context.Context, pk string, lek map[string]typ
 	fields, nextLEK, err := t.inner.HScan(ctx, pk, lek, limit)
 	return fields, nextLEK, t.obs(err)
 }
+
+// --- Geo seam forwarding ----------------------------------------------------
+//
+// The GEO family is optional (GeoStore, separate from Store). The throttle
+// decorator forwards to the inner store when it also implements GeoStore, so a
+// caller obtaining a GeoStore from storage.New's result works transparently; the
+// error is classified through the same throttle observer as every other call.
+
+var _ GeoStore = (*throttleStore)(nil)
+
+func (t *throttleStore) geo() (GeoStore, bool) {
+	g, ok := t.inner.(GeoStore)
+	return g, ok
+}
+
+func (t *throttleStore) GeoAdd(ctx context.Context, pk string, members map[string]GeoPoint) (int, error) {
+	g, ok := t.geo()
+	if !ok {
+		return 0, ErrGeoUnsupported
+	}
+	n, err := g.GeoAdd(ctx, pk, members)
+	return n, t.obs(err)
+}
+
+func (t *throttleStore) GeoPos(ctx context.Context, pk string, members []string) (map[string]GeoPoint, error) {
+	g, ok := t.geo()
+	if !ok {
+		return nil, ErrGeoUnsupported
+	}
+	m, err := g.GeoPos(ctx, pk, members)
+	return m, t.obs(err)
+}
+
+func (t *throttleStore) GeoDist(ctx context.Context, pk, member1, member2 string, unitMeters float64) (float64, bool, error) {
+	g, ok := t.geo()
+	if !ok {
+		return 0, false, ErrGeoUnsupported
+	}
+	d, present, err := g.GeoDist(ctx, pk, member1, member2, unitMeters)
+	return d, present, t.obs(err)
+}
+
+func (t *throttleStore) GeoHash(ctx context.Context, pk string, members []string) (map[string]string, error) {
+	g, ok := t.geo()
+	if !ok {
+		return nil, ErrGeoUnsupported
+	}
+	m, err := g.GeoHash(ctx, pk, members)
+	return m, t.obs(err)
+}
+
+func (t *throttleStore) GeoRadius(ctx context.Context, pk string, center GeoPoint, radius, unitMeters float64, count int) (map[string]GeoPoint, error) {
+	g, ok := t.geo()
+	if !ok {
+		return nil, ErrGeoUnsupported
+	}
+	m, err := g.GeoRadius(ctx, pk, center, radius, unitMeters, count)
+	return m, t.obs(err)
+}
+
+func (t *throttleStore) GeoRadiusByMember(ctx context.Context, pk, member string, radius, unitMeters float64, count int) (map[string]GeoPoint, error) {
+	g, ok := t.geo()
+	if !ok {
+		return nil, ErrGeoUnsupported
+	}
+	m, err := g.GeoRadiusByMember(ctx, pk, member, radius, unitMeters, count)
+	return m, t.obs(err)
+}

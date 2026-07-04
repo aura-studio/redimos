@@ -74,6 +74,11 @@ var (
 	// lost a race with another writer on the same key. It maps to a generic,
 	// retryable "-ERR" reply at the command layer (requirements 15.2, 16.4).
 	ErrRMWMaxRetries = errors.New("read-modify-write exceeded retry limit under contention")
+
+	// ErrGeoUnsupported is returned by the throttle decorator's GeoStore methods
+	// when the backing store does not implement GeoStore. It is an internal guard;
+	// production wiring always backs GEO with the redimo store.
+	ErrGeoUnsupported = errors.New("geo not supported by backing store")
 )
 
 // MaxRMWRetries bounds the optimistic-concurrency retry loop shared by the
@@ -126,6 +131,39 @@ type Meta struct {
 	Type  string // attribute t
 	Exp   int64  // attribute exp, epoch seconds; 0 = never expires
 	Count int64  // attribute cnt
+}
+
+// GeoPoint is a longitude/latitude pair carried across the geospatial seam so the
+// command layer never imports redimo directly.
+type GeoPoint struct {
+	Lon float64
+	Lat float64
+}
+
+// GeoStore is the optional geospatial seam backing the GEO command family. It is
+// kept separate from Store so the core data-structure fakes need not implement it;
+// production wiring supplies it via the same redimo-backed store. A GEO key is a
+// Sorted Set whose member score encodes the location, so callers still maintain
+// the zset meta/type and cnt around these calls. Distances and radii are expressed
+// in the caller's unit via unitMeters (metres per unit: m=1, km=1000, mi=1609.34,
+// ft=0.3048).
+type GeoStore interface {
+	// GeoAdd stores each member's location and returns how many members were newly
+	// added (not counting updates to existing members).
+	GeoAdd(ctx context.Context, pk string, members map[string]GeoPoint) (added int, err error)
+	// GeoPos returns the stored location of each present member (missing members
+	// are simply absent from the map).
+	GeoPos(ctx context.Context, pk string, members []string) (map[string]GeoPoint, error)
+	// GeoDist returns the distance between two members in the given unit; ok is
+	// false when either member is absent.
+	GeoDist(ctx context.Context, pk, member1, member2 string, unitMeters float64) (dist float64, ok bool, err error)
+	// GeoHash returns each present member's geohash string.
+	GeoHash(ctx context.Context, pk string, members []string) (map[string]string, error)
+	// GeoRadius returns the members within radius of center, capped at count
+	// (count <= 0 means unlimited).
+	GeoRadius(ctx context.Context, pk string, center GeoPoint, radius, unitMeters float64, count int) (map[string]GeoPoint, error)
+	// GeoRadiusByMember is GeoRadius centered on an existing member.
+	GeoRadiusByMember(ctx context.Context, pk, member string, radius, unitMeters float64, count int) (map[string]GeoPoint, error)
 }
 
 // Store is the storage seam over the redimo fork v1.7. It currently exposes the
@@ -2054,4 +2092,74 @@ func (s *redimoStore) ZScan(_ context.Context, pk string, lek map[string]types.A
 	}
 
 	return members, nextLEK, nil
+}
+
+// --- Geo data operations (GEO command family) -------------------------------
+//
+// A GEO key is a Sorted Set whose member score encodes the location, so the
+// command layer maintains the zset meta/type and cnt around these calls; the
+// methods below only touch the member items via the redimo GEO primitives.
+
+// compile-time assertion that redimoStore satisfies GeoStore.
+var _ GeoStore = (*redimoStore)(nil)
+
+func (s *redimoStore) GeoAdd(_ context.Context, pk string, members map[string]GeoPoint) (int, error) {
+	m := make(map[string]redimo.GLocation, len(members))
+	for name, p := range members {
+		m[name] = redimo.GLocation{Lat: p.Lat, Lon: p.Lon}
+	}
+	added, err := s.client.GEOADD(pk, m)
+	if err != nil {
+		return 0, err
+	}
+	return len(added), nil
+}
+
+func (s *redimoStore) GeoPos(_ context.Context, pk string, members []string) (map[string]GeoPoint, error) {
+	locs, err := s.client.GEOPOS(pk, members...)
+	if err != nil {
+		return nil, err
+	}
+	return toGeoPoints(locs), nil
+}
+
+func (s *redimoStore) GeoDist(_ context.Context, pk, member1, member2 string, unitMeters float64) (float64, bool, error) {
+	return s.client.GEODIST(pk, member1, member2, redimo.GUnit(unitMeters))
+}
+
+func (s *redimoStore) GeoHash(_ context.Context, pk string, members []string) (map[string]string, error) {
+	return s.client.GEOHASH(pk, members...)
+}
+
+func (s *redimoStore) GeoRadius(_ context.Context, pk string, center GeoPoint, radius, unitMeters float64, count int) (map[string]GeoPoint, error) {
+	locs, err := s.client.GEORADIUS(pk, redimo.GLocation{Lat: center.Lat, Lon: center.Lon}, radius, redimo.GUnit(unitMeters), geoCount(count))
+	if err != nil {
+		return nil, err
+	}
+	return toGeoPoints(locs), nil
+}
+
+func (s *redimoStore) GeoRadiusByMember(_ context.Context, pk, member string, radius, unitMeters float64, count int) (map[string]GeoPoint, error) {
+	locs, err := s.client.GEORADIUSBYMEMBER(pk, member, radius, redimo.GUnit(unitMeters), geoCount(count))
+	if err != nil {
+		return nil, err
+	}
+	return toGeoPoints(locs), nil
+}
+
+// geoCount maps a Redis COUNT (<=0 = unlimited) onto the redimo GEORADIUS count
+// argument, which loops while count > 0. Unlimited is represented as MaxInt32.
+func geoCount(count int) int32 {
+	if count <= 0 {
+		return math.MaxInt32
+	}
+	return int32(count)
+}
+
+func toGeoPoints(locs map[string]redimo.GLocation) map[string]GeoPoint {
+	out := make(map[string]GeoPoint, len(locs))
+	for name, l := range locs {
+		out[name] = GeoPoint{Lon: l.Lon, Lat: l.Lat}
+	}
+	return out
 }
