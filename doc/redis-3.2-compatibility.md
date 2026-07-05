@@ -6,6 +6,7 @@
 
 - [`command-reference.md`](command-reference.md) — Redis 3.2 全部 174 条命令 × redimos 处置（是否经 redimo）的逐条对照表。
 - [`gen/`](gen/) — 上表的生成脚本与数据（`redisCommandTable` 解析 + redimos 处置交叉映射）。
+- [`pika-migrate.md`](pika-migrate.md) — redimos 作为 **pika-migrate** 迁移目标的真机实测验证（真实 Pika v3.2.2 → redimos，全量 523 键逐字节一致、增量确定性命令一致、零拒绝；含操作步骤与非确定性命令 `SPOP` 限制）。
 
 对照口径以 **`redis/redis` @ branch `3.2` 的 `src/server.c`**（`redisCommandTable`）为权威来源，而非仅看 redimos 代码。
 
