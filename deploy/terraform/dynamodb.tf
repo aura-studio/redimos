@@ -17,8 +17,11 @@ resource "aws_kms_alias" "dynamodb" {
   target_key_id = aws_kms_key.dynamodb.key_id
 }
 
-# Single table modeled per design: pk (partition) + sk (sort), both strings.
-# key encoding is "{db}:{key}" with meta items at sk = "#meta".
+# Single table modeled per the redimo/v2 layout: pk (partition) + sk (sort), BOTH
+# Binary (B) — the fork stores keys and members as raw bytes so binary-safe key /
+# member / element names round-trip (a String-typed key would fold non-UTF-8 bytes
+# to U+FFFD and collide). skN (Number) plus the "idx" local secondary index give
+# sorted-set score / list-position ordering (redimo Queries the LSI in skN order).
 resource "aws_dynamodb_table" "redis_data" {
   name         = var.table_name
   billing_mode = "PAY_PER_REQUEST" # on-demand; on-demand start per design
@@ -28,12 +31,18 @@ resource "aws_dynamodb_table" "redis_data" {
 
   attribute {
     name = "pk"
-    type = "S"
+    type = "B"
   }
 
   attribute {
     name = "sk"
-    type = "S"
+    type = "B"
+  }
+
+  # Numeric sort key projected into the "idx" LSI for score/position ordering.
+  attribute {
+    name = "skN"
+    type = "N"
   }
 
   # Native TTL attribute. The proxy stores expiry as epoch seconds in "exp" on
@@ -55,9 +64,13 @@ resource "aws_dynamodb_table" "redis_data" {
     kms_key_arn = aws_kms_key.dynamodb.arn
   }
 
-  # No global/local secondary indexes by design. Sorted-set score ordering is
-  # implemented by the redimo layout as an ordered "sk" encoding within each
-  # partition (design.md: "redimo 用 sk 排序实现 score 序"), and SCAN/HSCAN/
-  # SSCAN/ZSCAN page the base table / a single pk via Query. There is therefore
-  # no separate "score index" GSI to provision; adding one would be unused cost.
+  # Local secondary index "idx" over (pk, skN): the redimo/v2 fork Queries it in
+  # skN order to serve sorted-set score ranges and list positions. It is REQUIRED
+  # by the storage layout — a table without it fails those reads. KEYS_ONLY keeps
+  # the index cost minimal (the base item is fetched by key when needed).
+  local_secondary_index {
+    name            = "idx"
+    range_key       = "skN"
+    projection_type = "KEYS_ONLY"
+  }
 }

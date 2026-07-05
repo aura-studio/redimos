@@ -9,14 +9,16 @@
 #   2. `final`  - copies only the binary into a distroless static image that
 #                 runs as a non-root user and exposes the RESP2 port 6379.
 #
-# Build context is the redimos repository root; the redimo dependency resolves
-# from the Go module proxy (github.com/aura-studio/redimo tag v1.7.0):
+# Build context is the redimos repository root; the redimo/v2 dependency resolves
+# from the Go module proxy at the version pinned in go.mod (github.com/aura-studio/
+# redimo/v2, currently v2.7.0):
 #
 #     docker build -t redimos:latest .
 # =============================================================================
 
 # ----------------------------- build stage ----------------------------------
-FROM golang:1.24-alpine AS build
+# Matches go.mod's `go 1.25`; an older toolchain would download an unpinned one.
+FROM golang:1.25-alpine AS build
 
 # git is occasionally needed for module resolution; ca-certificates lets the
 # build fetch modules over TLS when the module cache is cold.
