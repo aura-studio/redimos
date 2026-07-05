@@ -71,6 +71,7 @@
 | 版本 | 变更 |
 |---|---|
 | redimos **v1.26.0** | **对齐检测从 3 维扩到 13 维**(见 §10.2):新增 A 错误/arity/WRONGTYPE、B 数值/浮点/溢出、C 回复形状、D 边界/索引、E TTL/过期、F 无序集合等价、G SCAN 不变量、H 多 DB 隔离、I 单键寄存器安全、J 命令覆盖扫射——纯新增测试(无生产码改动),全部对真 Redis 3.2 实测通过。**实测刻画并记录两处平台/设计所限的分歧**:浮点累加(long double vs float64)、TTL 亚秒精度(秒级/Pika 对齐)。集成套件共 26 个测试函数全绿 |
+| redimos **v1.28.0** | **真 AWS DynamoDB 端到端实测 + 修一个真后端才现的 bug**(见 §10.3):在 EC2 上把代理指向 us-east-1 真 DynamoDB 跑 13 维集成——Porcupine 线性化在真后端逮到 **DEL→重建惰性删除竞态**(`DEL k;SET k v;GET k` 可返回 nil),已由 **redimo v2.6.1**(`DeleteMembers` 先查 `#meta`、键被重建则跳过)修复,真 DynamoDB 上 3/3 通过。另记录第三处平台分歧:DynamoDB Number **负零归一化**(`-0`→`0`,Redis 保留 `-0`)。升 redimo v2.6.1 |
 | redimos **v1.27.0** | **补齐先前推迟的 A 组 5 项**:**#16** `Table.Register` 由 panic 改**返错**(可单测 + 聚合报告所有坏注册,`finishRegistration` 汇总失败)；**#15** 给 `args.go` 补 `ParseFloat`/`ParseFloatReply`/`WriteNotFloat` 浮点三件套(对齐已有 `ParseInt` 三件套)+ 新增索引式类型访问器 `Args`(委托规范解析器、零逻辑重复),并把散落的 `parseFloatArg`/`parseScore` 收敛到 `ParseFloat`；**#20** BITFIELD wire 测试(SET/GET/INCRBY×WRAP/SAT/FAIL×有/无符号+错误路径)；**#21** 用 **Porcupine** 做**完整线性化检查**(单键 SET/GET/DEL 480 并发操作历史,实测可线性化);redimo 侧 **#19** 补 `DeleteMembers`/`ScanMetaKeys`/`SweepOrphans` 库级测试。全单元 + 全集成(含 Porcupine)全绿 |
 
 ---
@@ -212,9 +213,18 @@ HyperLogLog 是存在 Redis String 里的 "HYLL" blob;和 BIT 一样 **纯命令
 | **I 单键寄存器安全** | `linearizability_test.go` | 16×40 并发 SET/GET,每次 GET 必为某次真实写入值(无撕裂/幻读);可线性化子集 | ✅ 无违例(多项写非原子仍属已知、不在此检) |
 | **J 命令覆盖扫射** | `coverage_sweep_test.go` | 二线命令(SETEX/GETSET/MSET/MSETNX/HMSET/HSETNX/HINCRBY/LINSERT/L{PUSH,POP}X/LTRIM/SMOVE/S*STORE/ZINCRBY/ZRANK/ZREVRANGE/ZREMRANGEBY*/EXISTS 多键/DEL 多键…)57 例广度对拍 | ✅ 一致 |
 
-**两处已知、经实测刻画的分歧(非 bug,平台/设计所限,均已记录)**:
+**三处已知、经实测刻画的分歧(非 bug,平台/设计所限,均已记录)**:
 1. **浮点累加精度**:Redis 用 C `long double`(80 位)做 INCRBYFLOAT/ZINCRBY/HINCRBYFLOAT 累加,Go 只有 `float64`(64 位),结果在第 ~17 位有效数字分叉(如 `5003.1` vs `5003.10000000000000009`)。**直接分值存取/格式化逐字节一致**,仅累加分叉;测试改用 `eqFloatClose` 数值容差断言并记录。
 2. **TTL 亚秒精度**:redimos TTL 为**秒精度**(对齐 Pika v3.2.2),`PEXPIRE 200ms` 会向下取整、瞬时过期,与 Redis 毫秒精度不同。秒级过期两端一致。
+3. **负零归一化**(真 DynamoDB 实测才现):DynamoDB 的 Number 类型把 `-0` 归一化为 `0`,而 Redis 保留 `-0`——`ZADD -0` 后 `ZSCORE` 代理回 `0`、Redis 回 `-0`。**本地模拟器不归一化,把这点藏了**;真后端暴露。极端边角,`numeric_test.go` 已排除 `-0` 并注明。
+
+### 10.3 真 AWS DynamoDB 端到端实测
+
+除本地 DynamoDB Local 外,把代理指向 **us-east-1 真 DynamoDB**(EC2 上,`consistency=strong` 走 LSI 强一致读),对真 Redis 3.2 跑同一套 13 维集成——**真后端抓到一个本地模拟器藏住的真实 bug**:
+
+- **DEL→重建的惰性删除竞态**(Porcupine 线性化检查在真 DynamoDB 上逮到):`DEL k` 入队异步 `DeleteMembers(pk)`;紧接着 `SET k v` 重建 value 项;惰性删除器随后把它一并抹掉(`DeleteMembers` 删 pk 下所有非 `#meta` 项,含新 string value 项)→ 之后 `GET k` 对**已确认的写**返回 nil,违反线性化。**真 DynamoDB 的网络延迟给了删除器 mid-test 运行的窗口,本地模拟器太快藏住了**。修复:**redimo v2.6.1** 让 `DeleteMembers` 先查 `#meta`——若键已被重建(`#meta` 复现)则整体跳过(与 `SweepOrphans` 同源的孤儿判定)。`*STORE` 不受影响(它是 `DeleteMeta`→`DeleteMembers` 同步顺序,`#meta` 已先删)。真 DynamoDB 上 DEL-Porcupine 3/3 通过。残余极窄窗口需 per-incarnation epoch 才能彻底消除(已记录)。
+
+> 这正是"在真测试环境更深入测试"的价值:`-0` 归一化与 DEL 重建竞态两处**都只在真 DynamoDB 上现形**,本地模拟器的时序/归一化差异把它们藏住了。
 
 `I`(全量线性化,如 Porcupine 式历史检查器)覆盖任意历史属未来工作;当前 `I` 断言的是最能抓撕裂/幻读的单键寄存器安全性。
 
