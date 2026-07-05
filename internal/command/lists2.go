@@ -225,7 +225,7 @@ func (r *Router) handleLRem(ctx context.Context, c *server.Conn, args [][]byte) 
 		return
 	}
 
-	newList, removed := lremCompute(all, int(count), value)
+	newList, removed := lremCompute(all, count, value)
 	if removed == 0 {
 		w.Int(0)
 		return
@@ -245,15 +245,27 @@ func (r *Router) handleLRem(ctx context.Context, c *server.Conn, args [][]byte) 
 
 // lremCompute returns the element list with elements equal to value removed per
 // Redis' LREM count semantics, and how many were removed. count>0 removes up to
-// count occurrences scanning head->tail; count<0 removes up to -count scanning
+// count occurrences scanning head->tail; count<0 removes up to |count| scanning
 // tail->head; count==0 removes every occurrence. It never mutates all.
-func lremCompute(all [][]byte, count int, value []byte) (newList [][]byte, removed int) {
+//
+// count is an int64 (not int) and the magnitude is capped at n BEFORE any negation
+// so that count == math.MinInt64 does not overflow: `-math.MinInt64` wraps back to a
+// negative value, which previously made `left > 0` false immediately and removed
+// nothing. Redis treats such an over-large magnitude as "remove every match in the
+// scan direction" (its `removed == toremove` guard never fires), which capping at n
+// reproduces exactly — and removing all matches from the tail yields the same final
+// list as from the head, so direction is immaterial once the whole list is covered.
+func lremCompute(all [][]byte, count int64, value []byte) (newList [][]byte, removed int) {
 	n := len(all)
 	drop := make([]bool, n)
 
 	switch {
 	case count > 0:
-		for i, left := 0, count; i < n && left > 0; i++ {
+		left := count
+		if left > int64(n) {
+			left = int64(n)
+		}
+		for i := 0; i < n && left > 0; i++ {
 			if bytes.Equal(all[i], value) {
 				drop[i] = true
 				removed++
@@ -261,7 +273,16 @@ func lremCompute(all [][]byte, count int, value []byte) (newList [][]byte, remov
 			}
 		}
 	case count < 0:
-		for i, left := n-1, -count; i >= 0 && left > 0; i-- {
+		// Cap the magnitude at n before negating: for count <= -n (which includes the
+		// overflow-prone math.MinInt64) that is the whole list, so left = n; otherwise
+		// -count is a safe small magnitude.
+		var left int64
+		if count < -int64(n) {
+			left = int64(n)
+		} else {
+			left = -count
+		}
+		for i := n - 1; i >= 0 && left > 0; i-- {
 			if bytes.Equal(all[i], value) {
 				drop[i] = true
 				removed++

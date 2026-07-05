@@ -66,14 +66,47 @@ func TestZAddOddArgsSyntaxError(t *testing.T) {
 	}
 }
 
-func TestZAddSupportsInfinity(t *testing.T) {
+// TestScoreNotFinite pins redimos' accepted architectural divergence for infinite
+// sorted-set scores. Redis 3.2 stores ±inf, but DynamoDB's Number type cannot represent
+// infinity, so redimos rejects an infinite ZADD/ZINCRBY score up front with a clean,
+// deterministic error instead of attempting a doomed backend write. NaN stays a parse
+// error ("value is not a valid float") exactly as in Redis, and an inf RANGE bound (never
+// stored) is still accepted.
+func TestScoreNotFinite(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	sendRead(t, conn, r, "ZADD z +inf hi -inf lo")
-	if got, want := sendRead(t, conn, r, "ZSCORE z hi"), "$inf"; got != want {
-		t.Errorf("ZSCORE z hi = %q, want %q", got, want)
+
+	const notFinite = "-ERR score must be a finite number"
+	const notFloat = "-ERR value is not a valid float"
+
+	// ZADD with an infinite score (any spelling) is rejected before any write.
+	for _, sp := range []string{"+inf", "-inf", "inf", "Inf", "+INF", "-Inf"} {
+		if got := sendRead(t, conn, r, "ZADD z "+sp+" m"); got != notFinite {
+			t.Errorf("ZADD z %s m = %q, want %q", sp, got, notFinite)
+		}
 	}
-	if got, want := sendRead(t, conn, r, "ZSCORE z lo"), "$-inf"; got != want {
-		t.Errorf("ZSCORE z lo = %q, want %q", got, want)
+	// A partially-infinite multi-pair ZADD is rejected whole (no partial write).
+	if got := sendRead(t, conn, r, "ZADD z 1 a +inf b"); got != notFinite {
+		t.Errorf("ZADD z 1 a +inf b = %q, want %q", got, notFinite)
+	}
+	if got := sendRead(t, conn, r, "ZSCORE z a"); got != "$-1" {
+		t.Errorf("ZSCORE z a after rejected multi-pair = %q, want $-1 (nothing written)", got)
+	}
+	// ZINCRBY with an infinite increment is likewise rejected.
+	if got := sendRead(t, conn, r, "ZINCRBY z +inf m"); got != notFinite {
+		t.Errorf("ZINCRBY z +inf m = %q, want %q", got, notFinite)
+	}
+	// ZADD INCR too.
+	if got := sendRead(t, conn, r, "ZADD z INCR -inf m"); got != notFinite {
+		t.Errorf("ZADD z INCR -inf m = %q, want %q", got, notFinite)
+	}
+	// NaN remains a plain not-a-valid-float parse error (as in Redis).
+	if got := sendRead(t, conn, r, "ZADD z nan m"); got != notFloat {
+		t.Errorf("ZADD z nan m = %q, want %q", got, notFloat)
+	}
+	// An inf RANGE bound is NOT stored, so parseScoreBound still accepts it — a bad-float
+	// bound is the only rejection. (The full range reply shape is covered differentially.)
+	if got := sendRead(t, conn, r, "ZADD z 1 keep"); got != ":1" {
+		t.Errorf("ZADD z 1 keep = %q, want :1 (a finite score still works)", got)
 	}
 }
 

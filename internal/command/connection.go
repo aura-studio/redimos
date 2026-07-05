@@ -34,6 +34,12 @@ type Config struct {
 	// pk prefix "d{n}:". Requirement 2.8, 2.9.
 	MultiDB bool
 
+	// Databases is the number of logical DBs SELECT accepts when MultiDB is enabled:
+	// a valid index is [0, Databases). A value <= 0 defaults to Redis 3.2's 16.
+	// Matching this bound is what makes SELECT reject an out-of-range index the same
+	// way Redis does.
+	Databases int
+
 	// MaxCollectionResult caps the number of members a whole-collection reply
 	// (HGETALL/HKEYS/HVALS/SMEMBERS/LRANGE/ZRANGE...) or *STORE operand may
 	// materialize in proxy memory before the command is rejected, bounding the heap
@@ -218,12 +224,31 @@ func (r *Router) handleSelect(_ context.Context, c *server.Conn, args [][]byte) 
 		w.SimpleString("OK")
 		return
 	}
-	if !r.Config.MultiDB || idx < 0 {
+	// Non-zero index with multi-DB disabled: only DB 0 exists, so reject as an invalid
+	// index (redimos single-DB mode).
+	if !r.Config.MultiDB {
+		w.Error(resp.ErrInvalidDBIndex)
+		return
+	}
+	// Multi-DB: bound the index to [0, databases) like Redis 3.2 (default 16).
+	// Previously any positive index was accepted. Redis 3.2.12 replies the SAME
+	// "invalid DB index" text for a numeric-but-out-of-range index as for a
+	// non-numeric one (verified against the live oracle), so reuse ErrInvalidDBIndex.
+	if idx < 0 || idx >= int64(r.databases()) {
 		w.Error(resp.ErrInvalidDBIndex)
 		return
 	}
 	c.SetDB(int(idx))
 	w.SimpleString("OK")
+}
+
+// databases returns the configured logical DB count, defaulting to Redis' 16 when
+// unset so a bare Config still bounds SELECT the same way Redis does.
+func (r *Router) databases() int {
+	if r.Config.Databases > 0 {
+		return r.Config.Databases
+	}
+	return 16
 }
 
 // handleQuit replies "+OK" and closes the connection. redcon flushes the staged

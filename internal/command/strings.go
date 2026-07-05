@@ -430,7 +430,7 @@ func (r *Router) handleMSet(ctx context.Context, c *server.Conn, args [][]byte) 
 	pairs := args[1:]
 
 	if len(pairs)%2 != 0 {
-		w.Error(resp.ErrWrongNumberOfArgs("mset"))
+		w.Error(resp.ErrMSetOddArgs)
 		return
 	}
 
@@ -488,7 +488,8 @@ func (r *Router) handleMSetNX(ctx context.Context, c *server.Conn, args [][]byte
 	pairs := args[1:]
 
 	if len(pairs)%2 != 0 {
-		w.Error(resp.ErrWrongNumberOfArgs("msetnx"))
+		// Redis 3.2's shared msetGenericCommand reports "MSET" here even for MSETNX.
+		w.Error(resp.ErrMSetOddArgs)
 		return
 	}
 

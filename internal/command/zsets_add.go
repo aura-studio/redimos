@@ -100,9 +100,9 @@ func (r *Router) zaddFastPath(ctx context.Context, c *server.Conn, w *resp.Write
 	members := make([]storage.ZMember, 0, len(pairs)/2)
 	memberBytes := make([][]byte, 0, len(pairs)/2)
 	for j := 0; j < len(pairs); j += 2 {
-		score, ok := parseScore(pairs[j])
-		if !ok {
-			w.Error(errNotValidFloat)
+		score, errText := storeScore(pairs[j])
+		if errText != "" {
+			w.Error(errText)
 			return
 		}
 		members = append(members, storage.ZMember{Member: string(pairs[j+1]), Score: score})
@@ -147,9 +147,9 @@ func (r *Router) zaddFlagPath(ctx context.Context, c *server.Conn, w *resp.Write
 	added, changed := 0, 0
 
 	for j := 0; j < len(pairs); j += 2 {
-		score, ok := parseScore(pairs[j])
-		if !ok {
-			w.Error(errNotValidFloat)
+		score, errText := storeScore(pairs[j])
+		if errText != "" {
+			w.Error(errText)
 			return
 		}
 		mb := pairs[j+1]
@@ -217,9 +217,9 @@ func (r *Router) zaddFlagPath(ctx context.Context, c *server.Conn, w *resp.Write
 // honours NX/XX and returns the new score, or a nil bulk when the NX/XX condition blocks the
 // update.
 func (r *Router) zaddIncr(ctx context.Context, c *server.Conn, w *resp.Writer, key []byte, pk string, nx, xx bool, pairs [][]byte) {
-	delta, ok := parseScore(pairs[0])
-	if !ok {
-		w.Error(errNotValidFloat)
+	delta, errText := storeScore(pairs[0])
+	if errText != "" {
+		w.Error(errText)
 		return
 	}
 	member := pairs[1]

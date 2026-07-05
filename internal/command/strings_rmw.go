@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"math"
 
 	"github.com/aura-studio/redimos/v2/internal/guard"
 	"github.com/aura-studio/redimos/v2/internal/meta"
@@ -262,9 +263,15 @@ func (r *Router) handleSetRange(ctx context.Context, c *server.Conn, args [][]by
 	}
 
 	newLen, err := r.rmwString(ctx, pk, func(base []byte) ([]byte, error) {
-		// Resulting length = max(current length, offset+len(value)). Compute it in
-		// int64 first and reject an oversized result through the guard before
-		// allocating, so a huge offset cannot trigger a huge allocation.
+		// Resulting length = max(current length, offset+len(value)). offset is >= 0
+		// (a negative offset was rejected above) and len(val) > 0 here, so the sum
+		// overflows int64 ONLY for an offset near MaxInt64 — which would wrap `end`
+		// negative, defeat the size guard below, and panic at buf[offset:]. Reject it
+		// up front with the same size error the guard produces (the result vastly
+		// exceeds the value-size cap anyway).
+		if offset > math.MaxInt64-int64(len(val)) {
+			return nil, guard.CheckValueSize(math.MaxInt64)
+		}
 		end := offset + int64(len(val))
 		nl := int64(len(base))
 		if end > nl {

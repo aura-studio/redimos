@@ -86,6 +86,15 @@ func (r *Router) handleBitField(ctx context.Context, c *server.Conn, args [][]by
 		}
 		_, err := r.rmwString(ctx, pk, func(base []byte) ([]byte, error) {
 			next := append([]byte(nil), base...)
+			// Grow to the highest write offset UP FRONT — Redis' lookupStringForBitCommand
+			// sizes (and zero-fills) the string to the top write bit before applying any op,
+			// so the key is created/extended even when every write op overflow-FAILs and
+			// stores nothing. Without this, an all-FAIL command (e.g. `OVERFLOW FAIL SET u1
+			// 0 2`) left `applied` empty, and persisting an empty value to DynamoDB errored
+			// ("backend error") instead of creating the zero-filled key Redis leaves behind.
+			for int64(len(next)) < maxBytes {
+				next = append(next, 0)
+			}
 			var applied []byte
 			results = applyBitfield(next, ops, &applied)
 			if gerr := guard.CheckWrite(args[1], nil, [][]byte{applied}); gerr != nil {

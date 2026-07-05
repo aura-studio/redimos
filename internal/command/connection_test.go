@@ -234,10 +234,19 @@ func TestSelectNonZeroWithMultiDBEnabled(t *testing.T) {
 	}
 }
 
-func TestSelectNegativeRejectedEvenWithMultiDB(t *testing.T) {
-	conn, r := startConnServer(t, Config{MultiDB: true})
-	if got, want := sendRead(t, conn, r, "SELECT -1"), "-ERR invalid DB index"; got != want {
-		t.Errorf("SELECT -1 = %q, want %q", got, want)
+func TestSelectOutOfRangeWithMultiDB(t *testing.T) {
+	conn, r := startConnServer(t, Config{MultiDB: true}) // default 16 DBs
+	// Redis 3.2.12 replies the SAME "invalid DB index" text for a numeric-but-out-of-range
+	// index (negative, or >= databases) as for a non-numeric one — verified against the
+	// live oracle. What differs from the without-multi-DB case is only the accepted range.
+	for _, cmd := range []string{"SELECT -1", "SELECT 16", "SELECT 999"} {
+		if got, want := sendRead(t, conn, r, cmd), "-ERR invalid DB index"; got != want {
+			t.Errorf("%q = %q, want %q", cmd, got, want)
+		}
+	}
+	// The last in-range index (databases-1) is accepted.
+	if got, want := sendRead(t, conn, r, "SELECT 15"), "+OK"; got != want {
+		t.Errorf("SELECT 15 = %q, want %q", got, want)
 	}
 }
 

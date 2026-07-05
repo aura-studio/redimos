@@ -824,7 +824,13 @@ func (r *Router) handleSMove(ctx context.Context, c *server.Conn, args [][]byte)
 	srcPK := encodePK(c.DB(), srcKey)
 	dstPK := encodePK(c.DB(), dstKey)
 
-	// Both keys must be Sets (or absent). Check types before mutating either.
+	// Redis 3.2's smoveCommand order is load-tested here and must be preserved exactly:
+	//   1. source ABSENT  -> reply :0 immediately, WITHOUT type-checking the destination;
+	//   2. source WRONG type -> WRONGTYPE;
+	//   3. destination WRONG type (only reached once the source is a live set) -> WRONGTYPE;
+	//   4. member membership decides :1 (moved) vs :0.
+	// Checking the destination type before the absent-source short-circuit was a real
+	// divergence (`SMOVE absent-src string-dst m` wrongly replied WRONGTYPE instead of :0).
 	_, srcLive, srcWrong, err := r.setState(ctx, srcPK)
 	if err != nil {
 		r.writeStoreError(c, err)
@@ -834,17 +840,17 @@ func (r *Router) handleSMove(ctx context.Context, c *server.Conn, args [][]byte)
 		w.Error(resp.ErrWrongType)
 		return
 	}
+	// An absent source cannot contain the member → nothing to move. Return BEFORE the
+	// destination type-check to match Redis (step 1 above).
+	if !srcLive {
+		w.Int(0)
+		return
+	}
 	if _, _, dstWrong, err := r.setState(ctx, dstPK); err != nil {
 		r.writeStoreError(c, err)
 		return
 	} else if dstWrong {
 		w.Error(resp.ErrWrongType)
-		return
-	}
-
-	// An absent source cannot contain the member → nothing to move.
-	if !srcLive {
-		w.Int(0)
 		return
 	}
 

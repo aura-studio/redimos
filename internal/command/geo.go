@@ -149,7 +149,9 @@ func (r *Router) handleGeoDist(ctx context.Context, c *server.Conn, args [][]byt
 	}
 
 	pk := encodePK(c.DB(), args[1])
-	if done := r.geoWrongType(ctx, c, pk); done {
+	// GEODIST on a missing key/member replies $-1 via the member-not-found path below,
+	// matching Redis' shared.null fallback, so liveness is not needed here.
+	if _, done := r.geoWrongType(ctx, c, pk); done {
 		return
 	}
 
@@ -174,7 +176,14 @@ func (r *Router) handleGeoDist(ctx context.Context, c *server.Conn, args [][]byt
 // handleGeoPos implements GEOPOS key member [...].
 func (r *Router) handleGeoPos(ctx context.Context, c *server.Conn, args [][]byte) {
 	pk := encodePK(c.DB(), args[1])
-	if done := r.geoWrongType(ctx, c, pk); done {
+	live, done := r.geoWrongType(ctx, c, pk)
+	if done {
+		return
+	}
+	// Redis' GEOPOS looks the key up with lookupKeyReadOrReply(..., emptymultibulk):
+	// an absent key replies a single empty array (*0), NOT one nil per requested member.
+	if !live {
+		c.Redcon().WriteRaw(resp.AppendArrayHeader(nil, 0))
 		return
 	}
 
@@ -200,7 +209,13 @@ func (r *Router) handleGeoPos(ctx context.Context, c *server.Conn, args [][]byte
 // handleGeoHash implements GEOHASH key member [...].
 func (r *Router) handleGeoHash(ctx context.Context, c *server.Conn, args [][]byte) {
 	pk := encodePK(c.DB(), args[1])
-	if done := r.geoWrongType(ctx, c, pk); done {
+	live, done := r.geoWrongType(ctx, c, pk)
+	if done {
+		return
+	}
+	// As GEOPOS: an absent key replies an empty array (*0), not one nil per member.
+	if !live {
+		c.Redcon().WriteRaw(resp.AppendArrayHeader(nil, 0))
 		return
 	}
 
@@ -291,7 +306,8 @@ func (r *Router) handleGeoRadius(ctx context.Context, c *server.Conn, args [][]b
 	}
 
 	pk := encodePK(c.DB(), args[1])
-	if done := r.geoWrongType(ctx, c, pk); done {
+	// An absent key yields an empty scan → geoRadiusReply writes *0, matching Redis.
+	if _, done := r.geoWrongType(ctx, c, pk); done {
 		return
 	}
 	r.geoRadiusReply(ctx, c, pk, lat, lon, radius*unit, unit, opts)
@@ -316,7 +332,7 @@ func (r *Router) handleGeoRadiusByMember(ctx context.Context, c *server.Conn, ar
 	}
 
 	pk := encodePK(c.DB(), args[1])
-	if done := r.geoWrongType(ctx, c, pk); done {
+	if _, done := r.geoWrongType(ctx, c, pk); done {
 		return
 	}
 	lat, lon, found, err := r.memberPos(ctx, pk, string(args[2]))
@@ -405,18 +421,21 @@ func (r *Router) geoRadiusReply(ctx context.Context, c *server.Conn, pk string, 
 }
 
 // geoWrongType replies WRONGTYPE for a live non-zset key (a GEO key is a zset).
-// Returns true when a reply (WRONGTYPE or a store error) was already written.
-func (r *Router) geoWrongType(ctx context.Context, c *server.Conn, pk string) bool {
-	_, _, wrongType, err := r.zsetState(ctx, pk)
+// done is true when a reply (WRONGTYPE or a store error) was already written; live
+// reports whether the key logically exists, letting GEOPOS/GEOHASH reproduce Redis'
+// lookupKeyReadOrReply(..., emptymultibulk) — an absent GEO key replies an empty
+// array (*0), not a per-member array of nils.
+func (r *Router) geoWrongType(ctx context.Context, c *server.Conn, pk string) (live, done bool) {
+	_, live, wrongType, err := r.zsetState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
-		return true
+		return false, true
 	}
 	if wrongType {
 		resp.NewWriter(c.Redcon()).Error(resp.ErrWrongType)
-		return true
+		return false, true
 	}
-	return false
+	return live, false
 }
 
 // formatGeoCoord renders a coordinate the way Redis' GEOPOS does: 17 digits after

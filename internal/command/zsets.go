@@ -108,9 +108,11 @@ func (r *Router) zsetState(ctx context.Context, pk string) (m meta.Meta, live, w
 	return r.loadMetaState(ctx, pk, meta.TypeZSet)
 }
 
-// parseScore parses a ZADD score / ZINCRBY increment as an IEEE754 double,
-// accepting Redis' inf/-inf/+inf spellings and rejecting NaN. ok=false signals the
-// not-a-valid-float reply.
+// parseScore parses a ZADD score / ZINCRBY increment / ZRANGEBYSCORE bound as an
+// IEEE754 double, accepting Redis' inf/-inf/+inf spellings and rejecting NaN.
+// ok=false signals the not-a-valid-float reply. It does NOT reject ±inf, because a
+// RANGE bound (ZRANGEBYSCORE/ZCOUNT) legitimately uses +inf/-inf and is never
+// persisted; the store paths use storeScore instead.
 func parseScore(arg []byte) (float64, bool) {
 	switch string(arg) {
 	case "inf", "+inf", "Inf", "+Inf", "INF", "+INF":
@@ -119,9 +121,43 @@ func parseScore(arg []byte) (float64, bool) {
 		return math.Inf(-1), true
 	}
 
+	// Redis' getDoubleFromObject is strtod-based and parses an EMPTY string as 0.0
+	// (strtod("") returns 0 with eptr left at the start, which the surrounding checks
+	// accept). Go's strconv.ParseFloat instead rejects "", so special-case it to match
+	// the live oracle: `ZADD key "" m` stores score 0, and `ZCOUNT/ZRANGEBYSCORE key ""
+	// <hi>` treats the empty bound as 0. (An exclusive "(" with nothing after it reaches
+	// here as "" via parseScoreBound, so "(" behaves as exclusive-0 too, again like Redis.)
+	if len(arg) == 0 {
+		return 0, true
+	}
+
 	// The finite case shares the canonical ParseFloat (NaN-rejecting, whole-string).
 	f, err := ParseFloat(arg)
 	return f, err == nil
+}
+
+// errScoreNotFinite is redimos' reply when a score that would be PERSISTED is ±inf.
+// Redis accepts infinite sorted-set scores, but DynamoDB's Number type has no
+// representation for infinity (its magnitude tops out around 1e125), so redimos
+// cannot store one. This is a documented, accepted architectural divergence: rather
+// than issue a doomed backend write — which surfaced as a misleading "backend error,
+// retry later" and could stall the connection — the score is rejected up front with a
+// clear, deterministic message.
+const errScoreNotFinite = "ERR score must be a finite number"
+
+// storeScore parses a score/increment that will be WRITTEN (ZADD, ZADD INCR,
+// ZINCRBY). It rejects an unparseable float exactly as Redis does (errNotValidFloat)
+// and, unlike parseScore, also rejects a non-finite ±inf value with errScoreNotFinite
+// (see above). errText is "" on success.
+func storeScore(arg []byte) (score float64, errText string) {
+	f, ok := parseScore(arg)
+	if !ok {
+		return 0, errNotValidFloat
+	}
+	if math.IsInf(f, 0) {
+		return 0, errScoreNotFinite
+	}
+	return f, ""
 }
 
 // parseScoreBound parses a ZRANGEBYSCORE / ZCOUNT bound: a leading '(' selects the
@@ -177,9 +213,10 @@ func zMembersReply(w *resp.Writer, members []storage.ZMember, withScores bool) {
 	w.BulkArray(out)
 }
 
-// parseWithScores interprets the optional trailing tokens of a ZRANGE-family
-// command: an empty tail means no scores; a single "WITHSCORES" (any case) sets
-// the flag; anything else is a syntax error (ok=false). LIMIT is task 15.2.
+// parseWithScores interprets the optional trailing tokens of the rank-based
+// ZRANGE / ZREVRANGE: an empty tail means no scores; a single "WITHSCORES" (any
+// case) sets the flag; anything else is a syntax error (ok=false). These commands
+// take no LIMIT clause — that is the ...BYSCORE family's parseScoreTail.
 func parseWithScores(tail [][]byte) (withScores, ok bool) {
 	if len(tail) == 0 {
 		return false, true
@@ -189,6 +226,38 @@ func parseWithScores(tail [][]byte) (withScores, ok bool) {
 	}
 
 	return false, false
+}
+
+// parseScoreTail parses the optional trailer of ZRANGEBYSCORE / ZREVRANGEBYSCORE:
+// "[WITHSCORES] [LIMIT offset count]", where the two clauses may appear in EITHER
+// order (Redis 3.2's genericZrangebyscoreCommand walks the tail token-by-token).
+// offset/count default to the identity window (0, -1) = "all". errMsg is "" on
+// success; otherwise it is the exact RESP body to reply — a non-integer LIMIT
+// offset/count is the not-an-integer error (getLongFromObjectOrReply), while any
+// other malformed token, or a LIMIT without its two values, is a syntax error.
+func parseScoreTail(tail [][]byte) (withScores bool, offset, count int, errMsg string) {
+	offset, count = 0, -1
+	for i := 0; i < len(tail); {
+		switch {
+		case equalFold(tail[i], "WITHSCORES"):
+			withScores = true
+			i++
+		case equalFold(tail[i], "LIMIT") && i+2 < len(tail):
+			o, err := ParseInt(tail[i+1])
+			if err != nil {
+				return false, 0, 0, resp.ErrNotInteger
+			}
+			n, err := ParseInt(tail[i+2])
+			if err != nil {
+				return false, 0, 0, resp.ErrNotInteger
+			}
+			offset, count = int(o), int(n)
+			i += 3
+		default:
+			return false, 0, 0, resp.ErrSyntax
+		}
+	}
+	return withScores, offset, count, ""
 }
 
 // equalFold reports whether b equals s ignoring ASCII case. It avoids allocating

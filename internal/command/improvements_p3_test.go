@@ -46,25 +46,39 @@ func TestLInsertWrongTypeBeatsSizeGuard(t *testing.T) {
 	}
 }
 
-// --- INCRBYFLOAT / HINCRBYFLOAT reject an infinite increment (P3-2) -----------
-
-func TestIncrByFloatRejectsInfiniteIncrement(t *testing.T) {
+// --- INCRBYFLOAT / HINCRBYFLOAT and an infinite increment (P3-2) --------------
+//
+// Redis 3.2 splits ±Inf by spelling, and so must we (verified against the live
+// oracle):
+//   - the LITERAL "inf"/"+inf"/"-inf" is a VALID increment; the command fails on the
+//     non-finite RESULT with "increment would produce NaN or Infinity".
+//   - an OVERFLOWING magnitude "1e400" is rejected at PARSE with "value is not a valid
+//     float".
+func TestIncrByFloatInfiniteIncrement(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
 
 	sendRead(t, conn, r, "SET k 1")
-	for _, inc := range []string{"inf", "+inf", "-inf", "1e400"} {
-		if got := sendRead(t, conn, r, "INCRBYFLOAT k "+inc); got != "-ERR value is not a valid float" {
-			t.Fatalf("INCRBYFLOAT k %s = %q, want -ERR value is not a valid float", inc, got)
+	// Literal infinities parse OK, then fail on the infinite result.
+	for _, inc := range []string{"inf", "+inf", "-inf"} {
+		if got := sendRead(t, conn, r, "INCRBYFLOAT k "+inc); got != "-ERR increment would produce NaN or Infinity" {
+			t.Fatalf("INCRBYFLOAT k %s = %q, want -ERR increment would produce NaN or Infinity", inc, got)
 		}
+	}
+	// An overflowing magnitude is a parse error, not a result error.
+	if got := sendRead(t, conn, r, "INCRBYFLOAT k 1e400"); got != "-ERR value is not a valid float" {
+		t.Fatalf("INCRBYFLOAT k 1e400 = %q, want -ERR value is not a valid float", got)
 	}
 	// A finite increment still works.
 	if got := sendRead(t, conn, r, "INCRBYFLOAT k 2.5"); got != "$3.5" {
 		t.Fatalf("INCRBYFLOAT k 2.5 = %q, want $3.5", got)
 	}
-	// HINCRBYFLOAT shares the same parse path.
+	// HINCRBYFLOAT shares the same parse path and result guard.
 	sendRead(t, conn, r, "HSET h f 1")
-	if got := sendRead(t, conn, r, "HINCRBYFLOAT h f inf"); got != "-ERR value is not a valid float" {
-		t.Fatalf("HINCRBYFLOAT h f inf = %q, want -ERR value is not a valid float", got)
+	if got := sendRead(t, conn, r, "HINCRBYFLOAT h f inf"); got != "-ERR increment would produce NaN or Infinity" {
+		t.Fatalf("HINCRBYFLOAT h f inf = %q, want -ERR increment would produce NaN or Infinity", got)
+	}
+	if got := sendRead(t, conn, r, "HINCRBYFLOAT h f 1e400"); got != "-ERR value is not a valid float" {
+		t.Fatalf("HINCRBYFLOAT h f 1e400 = %q, want -ERR value is not a valid float", got)
 	}
 }
 

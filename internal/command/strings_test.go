@@ -812,9 +812,17 @@ func TestMSetMultiplePairs(t *testing.T) {
 
 func TestMSetOddArgsError(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	want := "-ERR wrong number of arguments for 'mset' command"
+	// When the arity is satisfied but the pairs do not match up (an ODD count), Redis 3.2's
+	// msetGenericCommand replies this exact literal — uppercase "MSET", unquoted, no
+	// " command" suffix — for BOTH MSET and MSETNX (they share the function). This is
+	// distinct from the too-few-args arity error ("...for 'mset' command"). Verified
+	// against the live redis:3.2 oracle.
+	want := "-ERR wrong number of arguments for MSET"
 	if got := sendRead(t, conn, r, "MSET a 1 b"); got != want {
 		t.Errorf("MSET a 1 b = %q, want %q", got, want)
+	}
+	if got := sendRead(t, conn, r, "MSETNX a 1 b"); got != want {
+		t.Errorf("MSETNX a 1 b = %q, want %q (MSETNX reports MSET too)", got, want)
 	}
 }
 

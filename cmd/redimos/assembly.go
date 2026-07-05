@@ -193,6 +193,7 @@ func run(cfg appConfig) error {
 		command.Config{
 			RequirePass:         cfg.requirepass,
 			MultiDB:             cfg.multiDB,
+			Databases:           cfg.databases,
 			MaxCollectionResult: cfg.maxCollectionResult,
 			ScanTimeout:         cfg.scanTimeout,
 		},

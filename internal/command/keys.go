@@ -144,6 +144,22 @@ func (r *Router) handleDel(ctx context.Context, c *server.Conn, args [][]byte) {
 		}
 		live := found && !meta.IsExpired(m, now)
 
+		// A String key has exactly ONE data item — its value at the reserved 0x00 sort key —
+		// so reclaim it SYNCHRONOUSLY here rather than leaving it to the async deleter. This
+		// is cheap (one item) and closes a real correctness hazard: the value item shares its
+		// 0x00 sort key with a collection's empty member, so if a DEL'd String's async reclaim
+		// lags behind the same key being rebuilt as a COLLECTION, the async deleter skips the
+		// now-live key (its IsLive guard) and the orphaned value item lingers — surfacing as a
+		// PHANTOM empty "" member/field in SMEMBERS/HKEYS/HGETALL under load. Deleting it inline
+		// makes SET-over-collection → DEL → rebuild deterministic. Collections keep async
+		// reclaim (a large collection must not block the DEL reply).
+		if found && m.Type == meta.TypeString {
+			if _, err := r.Storage.Store.DeleteMembers(ctx, pk); err != nil {
+				r.writeStoreError(c, err)
+				return
+			}
+		}
+
 		// Remove the meta item and enqueue member cleanup regardless of expiry, so
 		// an expired-but-present key's data is still reclaimed even though it does
 		// not count toward the reply.

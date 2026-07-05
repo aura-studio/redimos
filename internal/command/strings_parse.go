@@ -1,8 +1,6 @@
 package command
 
 import (
-	"math"
-
 	"github.com/aura-studio/redimos/v2/internal/resp"
 )
 
@@ -73,17 +71,22 @@ func parseSetOptions(opts [][]byte, now int64) (setOptions, string) {
 	return o, ""
 }
 
-// parseFloatArg parses an INCRBYFLOAT / HINCRBYFLOAT increment with Redis' semantics:
-// a FINITE decimal/exponent, whole string consumed. ok is false when the argument is
-// not a valid float. Redis rejects a non-finite increment ("inf", "1e400", ...) at
-// parse time with "value is not a valid float" (string2ld rejects inf/nan); the shared
-// ParseFloat only rejects NaN (it must still accept ±inf for ZADD scores), so also
-// reject ±Inf here so the increment path matches Redis rather than deferring to the
-// store's "increment would produce NaN or Infinity".
+// parseFloatArg parses an INCRBYFLOAT / HINCRBYFLOAT increment with Redis 3.2's exact
+// semantics, and ok is false when the argument is not a valid increment. The subtle part
+// is ±Inf, which Redis treats in two different ways depending on how it is spelled — and
+// ParseFloat already reproduces the split:
+//
+//   - the LITERAL "inf"/"+inf"/"-inf" is ACCEPTED at parse (Redis' string2ld only rejects
+//     an overflow-to-HUGE_VAL, not a representable infinity); the command then fails on the
+//     non-finite RESULT with "increment would produce NaN or Infinity". strconv.ParseFloat
+//     likewise returns (+Inf, nil) for the literal, so ParseFloat returns it and we defer
+//     to the store's inf/NaN-result guard — verified against the live oracle.
+//   - an OVERFLOWING magnitude like "1e400" is REJECTED at parse with "value is not a valid
+//     float" (string2ld sees errno==ERANGE with value==HUGE_VAL); strconv returns ErrRange
+//     for it, so ParseFloat returns ErrNotFloat and we reject here.
+//
+// NaN is rejected at parse by ParseFloat, matching Redis.
 func parseFloatArg(arg []byte) (float64, bool) {
 	f, err := ParseFloat(arg)
-	if err != nil || math.IsInf(f, 0) {
-		return 0, false
-	}
-	return f, true
+	return f, err == nil
 }

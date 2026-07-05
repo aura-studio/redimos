@@ -52,9 +52,9 @@ func (r *Router) handleZIncrBy(ctx context.Context, c *server.Conn, args [][]byt
 	w := resp.NewWriter(c.Redcon())
 	key := args[1]
 
-	delta, ok := parseScore(args[2])
-	if !ok {
-		w.Error(errNotValidFloat)
+	delta, errText := storeScore(args[2])
+	if errText != "" {
+		w.Error(errText)
 		return
 	}
 	member := args[3]
@@ -167,9 +167,11 @@ func (r *Router) zRangeByScore(ctx context.Context, c *server.Conn, args [][]byt
 		min, max = second, first
 	}
 
-	withScores, ok := parseWithScores(args[4:])
-	if !ok {
-		w.Error(resp.ErrSyntax)
+	// "[WITHSCORES] [LIMIT offset count]" (either order). Option errors take
+	// precedence over the absent-key empty reply, matching Redis' parse-then-lookup.
+	withScores, offset, count, errMsg := parseScoreTail(args[4:])
+	if errMsg != "" {
+		w.Error(errMsg)
 		return
 	}
 
@@ -192,6 +194,10 @@ func (r *Router) zRangeByScore(ctx context.Context, c *server.Conn, args [][]byt
 		r.writeStoreError(c, merr)
 		return
 	}
+
+	// Apply the LIMIT window to the already-ordered range (asc for ZRANGEBYSCORE,
+	// desc for ZREVRANGEBYSCORE). The default (0, -1) is a no-op.
+	members = applyZLimit(members, offset, count)
 
 	zMembersReply(w, members, withScores)
 }

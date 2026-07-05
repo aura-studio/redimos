@@ -31,6 +31,7 @@ type appConfig struct {
 	addr                string // listen address for the RESP2 endpoint
 	requirepass         string // single-password AUTH; empty disables auth
 	multiDB             bool   // permit SELECT n (n != 0)
+	databases           int    // logical DB count bounding SELECT when multi-DB is on
 	maxCollectionResult int    // cap on whole-collection reply/operand size (0 disables)
 	maxCommandBytes     int    // reject a single command larger than this (0 disables)
 
@@ -70,6 +71,7 @@ func parseFlags() appConfig {
 	flag.StringVar(&c.addr, "addr", ":6379", "listen address for the RESP2 endpoint")
 	flag.StringVar(&c.requirepass, "requirepass", "", "single-password AUTH (empty disables auth)")
 	flag.BoolVar(&c.multiDB, "multi-db", false, "permit SELECT of non-zero DB indexes")
+	flag.IntVar(&c.databases, "databases", 16, "logical DB count bounding SELECT when -multi-db is set (Redis default 16)")
 	flag.IntVar(&c.maxCollectionResult, "max-collection-result", 0, "reject a whole-collection reply/operand (HGETALL/SMEMBERS/...) with more than N members (0 disables)")
 	flag.IntVar(&c.maxCommandBytes, "max-command-bytes", 0, "reject a single command whose raw wire size exceeds N bytes (0 disables)")
 	flag.DurationVar(&c.commandTimeout, "command-timeout", 0, "per-command deadline bounding its DynamoDB calls; a command exceeding it is cancelled and replies an error (0 disables)")
@@ -146,6 +148,9 @@ func validateConfig(cfg appConfig) error {
 	}
 	if cfg.commandTimeout < 0 {
 		return fmt.Errorf("-command-timeout must be >= 0, got %s", cfg.commandTimeout)
+	}
+	if cfg.databases < 1 {
+		return fmt.Errorf("-databases must be >= 1, got %d", cfg.databases)
 	}
 	if cfg.cbThreshold < 0 {
 		return fmt.Errorf("-circuit-breaker-threshold must be >= 0, got %d", cfg.cbThreshold)

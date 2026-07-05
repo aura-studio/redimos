@@ -136,6 +136,14 @@ const (
 	// Requirement 3.5.
 	ErrSyntax = "ERR syntax error"
 
+	// ErrMSetOddArgs is returned by MSET and MSETNX when the arity is satisfied but the
+	// key/value arguments do not pair up (an odd count). Redis 3.2's msetGenericCommand
+	// hard-codes this exact literal — note the UPPERCASE "MSET" with no quotes and no
+	// " command" suffix, and that MSETNX reports "MSET" too because it shares the same
+	// function. It is distinct from the generic too-few-args arity error, which does use
+	// the quoted lowercased 'mset'/'msetnx' form.
+	ErrMSetOddArgs = "ERR wrong number of arguments for MSET"
+
 	// ErrNotValidFloat is returned when a float argument (or the target value of
 	// INCRBYFLOAT) is not a valid floating-point number. Requirement 5.9.
 	ErrNotValidFloat = "ERR value is not a valid float"
@@ -209,9 +217,12 @@ const (
 	// Redis 3.2 byte-for-byte ("ERR invalid cursor").
 	ErrInvalidCursor = "ERR invalid cursor"
 
-	// ErrInvalidDBIndex is returned when SELECT n (n != 0) is issued while
-	// multi-DB is disabled, or when the index is otherwise out of range.
-	// Requirement 2.8.
+	// ErrInvalidDBIndex is returned by SELECT for EVERY invalid index: a non-numeric
+	// argument, a non-zero SELECT while multi-DB is disabled, AND a numeric index outside
+	// [0, databases). The live redis:3.2 oracle replies this SAME text for all three cases
+	// (verified: `SELECT 16`, `SELECT -1`, and `SELECT abc` all yield "ERR invalid DB
+	// index"), so — unlike mainline Redis 3.2, whose selectDb path emits a distinct "DB
+	// index is out of range" — we deliberately use one message throughout. Requirement 2.8.
 	ErrInvalidDBIndex = "ERR invalid DB index"
 
 	// ErrNoSuchKey is returned by LSET when the target key does not exist (an
