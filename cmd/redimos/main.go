@@ -34,6 +34,8 @@ type appConfig struct {
 	maxCollectionResult int    // cap on whole-collection reply/operand size (0 disables)
 	maxCommandBytes     int    // reject a single command larger than this (0 disables)
 
+	commandTimeout time.Duration // per-command deadline bounding its backend calls (0 disables)
+
 	// DynamoDB / storage.
 	table          string // DynamoDB table name
 	consistency    string // read consistency: strong|eventual
@@ -66,6 +68,7 @@ func parseFlags() appConfig {
 	flag.BoolVar(&c.multiDB, "multi-db", false, "permit SELECT of non-zero DB indexes")
 	flag.IntVar(&c.maxCollectionResult, "max-collection-result", 0, "reject a whole-collection reply/operand (HGETALL/SMEMBERS/...) with more than N members (0 disables)")
 	flag.IntVar(&c.maxCommandBytes, "max-command-bytes", 0, "reject a single command whose raw wire size exceeds N bytes (0 disables)")
+	flag.DurationVar(&c.commandTimeout, "command-timeout", 0, "per-command deadline bounding its DynamoDB calls; a command exceeding it is cancelled and replies an error (0 disables)")
 
 	flag.StringVar(&c.table, "table", "redis-data", "DynamoDB single-table name")
 	flag.StringVar(&c.consistency, "consistency", "strong", "default read consistency: strong|eventual")
@@ -130,6 +133,9 @@ func validateConfig(cfg appConfig) error {
 	}
 	if cfg.maxCommandBytes < 0 {
 		return fmt.Errorf("-max-command-bytes must be >= 0, got %d", cfg.maxCommandBytes)
+	}
+	if cfg.commandTimeout < 0 {
+		return fmt.Errorf("-command-timeout must be >= 0, got %s", cfg.commandTimeout)
 	}
 	if cfg.scanTimeout < 0 {
 		return fmt.Errorf("-scan-timeout must be >= 0, got %s", cfg.scanTimeout)

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/aura-studio/redimos/v2/internal/command"
+	"github.com/aura-studio/redimos/v2/internal/ddbobs"
 	"github.com/aura-studio/redimos/v2/internal/guard"
 	"github.com/aura-studio/redimos/v2/internal/meta"
 	"github.com/aura-studio/redimos/v2/internal/metrics"
@@ -66,18 +67,30 @@ func run(cfg appConfig) error {
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)
 	}
+	// --- metrics: Prometheus registry + collectors + slowlog ring -----------
+	//
+	// The registry is created before the DynamoDB client so the backend telemetry
+	// observer (SDK retry attempts / throttled retries / consumed capacity units) can
+	// be installed as a client middleware. The large-key interception gauge is sourced
+	// live from guard.Interceptions so the size-guard rejection count is surfaced
+	// without metrics importing guard (requirement 18.5).
+	registry := prometheus.NewRegistry()
+	dynamoObs := metrics.NewDynamoObserver(registry)
+
 	ddb := dynamodb.NewFromConfig(awsCfg, func(o *dynamodb.Options) {
 		if cfg.dynamoEndpoint != "" {
 			o.BaseEndpoint = aws.String(cfg.dynamoEndpoint)
 		}
-	})
+	}, ddbobs.WithObservability(dynamoObs))
 
-	// --- metrics: Prometheus registry + collectors + slowlog ring -----------
-	//
-	// The large-key interception gauge is sourced live from guard.Interceptions
-	// so the size-guard rejection count is surfaced without metrics importing
-	// guard (requirement 18.5).
-	registry := prometheus.NewRegistry()
+	// Fail fast: confirm the backend is reachable, the table exists, and credentials
+	// are valid BEFORE serving, instead of binding the RESP listener and then erroring
+	// on every command. Uses a bounded GetItem on a reserved sentinel key (only the
+	// read permission the proxy already holds — no DescribeTable grant needed).
+	if err := checkBackend(ctx, ddb, cfg.table, 5*time.Second); err != nil {
+		return fmt.Errorf("backend startup check for table %q failed: %w", cfg.table, err)
+	}
+
 	slowlog := metrics.NewSlowLog(metrics.SlowlogConfig{
 		Capacity:  cfg.slowlogCapacity,
 		Threshold: cfg.slowlogThreshold,
@@ -180,9 +193,12 @@ func run(cfg appConfig) error {
 	)
 
 	// --- server: redcon RESP2 shell wired to the router --------------------
-	// Wrap the router so every command feeds the Prometheus metrics + slowlog (the
-	// facilities were exposed via /metrics, INFO and SLOWLOG but never recorded).
-	dispatcher := command.NewObservedDispatcher(router, m, slowlog, cfg.slowlogThreshold)
+	// Dispatch chain (outermost first): Observed measures every command and feeds the
+	// Prometheus metrics + slowlog; Timeout applies the per-command deadline (a no-op
+	// wrapper when -command-timeout is 0) which — because the ctx threads to DynamoDB —
+	// bounds a command's backend work end-to-end.
+	timed := command.NewTimeoutDispatcher(router, cfg.commandTimeout)
+	dispatcher := command.NewObservedDispatcher(timed, m, slowlog, cfg.slowlogThreshold)
 	srv := server.New(server.Options{Addr: cfg.addr, InstID: instID, MaxCommandBytes: cfg.maxCommandBytes}, dispatcher)
 
 	// Start the background reclaimers on a detached context so a shutdown signal
@@ -190,6 +206,12 @@ func run(cfg appConfig) error {
 	// calls during shutdown.
 	deleter.Start(context.Background())
 	sweeper.Start(context.Background())
+
+	// Background backend health prober: caches DynamoDB reachability (a bounded
+	// sentinel GetItem every 10s) so /readyz reflects real backend health with a
+	// non-blocking atomic read. Seeded healthy since the startup check just passed.
+	probe := newBackendProbe(ddb, cfg.table, 10*time.Second, 2*time.Second, true)
+	probe.Start(context.Background())
 
 	// --- metrics HTTP endpoint (requirement 18.5) --------------------------
 	mux := http.NewServeMux()
@@ -201,16 +223,25 @@ func run(cfg appConfig) error {
 		_, _ = io.WriteString(w, "ok")
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		// Readiness: a cheap, non-blocking snapshot of the background-reclaimer and
-		// contention signals (all lock-free atomic reads) an LB/operator can inspect or
-		// gate on. Kept separate from /healthz so a readiness policy can evolve without
-		// affecting liveness.
+		// Readiness now reflects backend health: when the cached DynamoDB probe is
+		// unhealthy the proxy cannot serve correctly, so /readyz returns 503 and the LB
+		// drains it (liveness /healthz stays 200 so it is not restarted — a transient
+		// backend blip should shed traffic, not kill the pod). The reclaimer/contention
+		// signals remain in the body for operators; all reads are lock-free atomics.
+		ready := probe.Healthy()
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		if ready {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		backendErr := probe.LastError()
 		fmt.Fprintf(w,
-			`{"ready":true,"lazy_delete_queue_depth":%d,"lazy_delete_dropped":%d,"lazy_delete_failures":%d,`+
+			`{"ready":%t,"backend_healthy":%t,"backend_error":%q,`+
+				`"lazy_delete_queue_depth":%d,"lazy_delete_dropped":%d,"lazy_delete_failures":%d,`+
 				`"lazy_delete_islive_errors":%d,`+
 				`"orphan_sweep_runs":%d,"orphan_sweep_failures":%d,"rmw_exhausted":%d,"large_key_interceptions":%d}`+"\n",
+			ready, ready, backendErr,
 			deleter.QueueLen(), deleter.Dropped(), deleter.Failures(), deleter.IsLiveErrors(),
 			sweeper.Runs(), sweeper.Failures(), storage.RMWExhausted(), guard.Interceptions())
 	})
@@ -279,6 +310,7 @@ func run(cfg appConfig) error {
 			log.Printf("redimos: server drain: %v", err)
 		}
 	})
+	shutdownStage("probe-stop", 2*time.Second, probe.Stop)
 	shutdownStage("sweeper-stop", 2*time.Second, sweeper.Stop)
 	shutdownStage("deleter-drain", 3*time.Second, deleter.Stop)
 
