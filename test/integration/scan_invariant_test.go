@@ -40,7 +40,7 @@ func parseScanReply(t *testing.T, reply []byte) (cursor string, elems []string) 
 	if len(reply) == 0 || reply[0] != '*' {
 		t.Fatalf("scan reply not an array: %q", reply)
 	}
-	_, rest := nextLine(reply) // skip "*2"
+	_, rest := nextLine(reply)  // skip "*2"
 	hdr, rest := nextLine(rest) // cursor bulk header "$n"
 	if len(hdr) == 0 || hdr[0] != '$' {
 		t.Fatalf("scan cursor not a bulk: %q", reply)
