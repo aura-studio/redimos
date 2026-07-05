@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	redimo "github.com/aura-studio/redimo/v2"
+	redimo "github.com/aura-studio/redimo/v3"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 

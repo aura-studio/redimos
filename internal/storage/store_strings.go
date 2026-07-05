@@ -5,7 +5,7 @@ import (
 	"math"
 	"strconv"
 
-	redimo "github.com/aura-studio/redimo/v2"
+	redimo "github.com/aura-studio/redimo/v3"
 )
 
 func (s *redimoStore) GetString(ctx context.Context, pk string) ([]byte, bool, error) {

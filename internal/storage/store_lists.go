@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	redimo "github.com/aura-studio/redimo/v2"
+	redimo "github.com/aura-studio/redimo/v3"
 )
 
 // --- List data operations (task 16.1) --------------------------------------

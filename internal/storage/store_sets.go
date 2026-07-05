@@ -5,7 +5,7 @@ import (
 	"math"
 	"math/rand"
 
-	redimo "github.com/aura-studio/redimo/v2"
+	redimo "github.com/aura-studio/redimo/v3"
 )
 
 // --- Set data operations (task 14.1) ---------------------------------------

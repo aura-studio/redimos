@@ -5,7 +5,7 @@ import (
 	"math"
 	"strconv"
 
-	redimo "github.com/aura-studio/redimo/v2"
+	redimo "github.com/aura-studio/redimo/v3"
 )
 
 // --- Hash data operations (task 13.1) --------------------------------------
