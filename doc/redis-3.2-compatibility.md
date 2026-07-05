@@ -68,6 +68,10 @@
 
 **收官说明**:22 项方案共落地 17 项;主动跳过 5 项并说明理由——#12(库 LLEN 读 cnt 对其真实调用方反更慢)、#13(游标循环容量远小于 2⁶⁴,实际恒 O(1))、#15/#16(类型化 Args / Register 返错各 ~100/200 处机械大改,价值最低风险最高)、#22(IsExpired 边界是有意的 Pika 对齐)。
 
+| 版本 | 变更 |
+|---|---|
+| redimos **v1.26.0** | **对齐检测从 3 维扩到 13 维**(见 §10.2):新增 A 错误/arity/WRONGTYPE、B 数值/浮点/溢出、C 回复形状、D 边界/索引、E TTL/过期、F 无序集合等价、G SCAN 不变量、H 多 DB 隔离、I 单键寄存器安全、J 命令覆盖扫射——纯新增测试(无生产码改动),全部对真 Redis 3.2 实测通过。**实测刻画并记录两处平台/设计所限的分歧**:浮点累加(long double vs float64)、TTL 亚秒精度(秒级/Pika 对齐)。集成套件共 26 个测试函数全绿 |
+
 ---
 
 ## 3. 字符 / 字节安全（已对齐）
@@ -189,6 +193,29 @@ HyperLogLog 是存在 Redis String 里的 "HYLL" blob;和 BIT 一样 **纯命令
 - **`differential_test.go`（差分一致性）**:**83 条** redimo 后端命令(string/key/hash/list/set/zset/BIT/HLL,只取顺序确定的)对真 Redis 3.2 **逐字节一致**。v1.22.0 起新增覆盖 LREM 高位下标数值序(重复项落在 `"10"<"2"` 字符串序边界)、ZRANGEBYLEX/ZREVRANGEBYLEX `- +`、ZLEXCOUNT `- +`/有界——复验代理的词法/秩范围路径经 redimo v2.3.0 `#meta` 前缀变更后仍与 Redis 逐字节一致且不泄漏/多算 `#meta`。
 
 实测(vs redis:3.2.12)四项全绿。
+
+### 10.2 对齐检测的十个维度(v1.26.0）
+
+原三维(差分/原子/字符集)是必要地基但偏 happy-path/单命令/单线程。v1.26.0 补齐 **10 个对齐检测维度**(`test/integration/`,共享 `differ` 双端对拍框架:`eq` 逐字节 / `eqSorted` 无序集合 / `eqFloatClose` 数值容差 / `eqIntClose` 整数容差),全部对真 Redis 3.2 实测:
+
+| 维度 | 文件 | 检测内容 | 结果 |
+|---|---|---|---|
+| **A 错误/arity/WRONGTYPE** | `errors_test.go` | 参数个数错/打错类型键/非法参数 的错误串,57 例 | ✅ 逐字节一致 |
+| **B 数值/浮点/溢出** | `numeric_test.go` | ZADD/ZSCORE 分值格式化(含科学计数/负零)、INCR 溢出错误 | ✅ 直接格式化逐字节一致;**INCRBYFLOAT/ZINCRBY 累加**见下「已知分歧」 |
+| **C 回复形状** | `shape_test.go` | 缺失/空/存在键的 `$-1`/`*0`/`$0`/`:N`/TYPE/TTL 形状,48 例 | ✅ 逐字节一致 |
+| **D 边界/索引** | `boundary_test.go` | LRANGE/GETRANGE/ZRANGE 负索引/越界/`start>stop`、LSET 越界、`(`/`inf` 分值边界、词法边界 | ✅ 逐字节一致 |
+| **E TTL/过期** | `ttl_test.go` | TTL/PTTL/PERSIST 哨兵、EXPIRE 后取值(±1s)、到期真消失 | ✅ 秒级一致;**亚秒精度**见下 |
+| **F 无序回复集合等价** | `unordered_test.go` | SMEMBERS/HKEYS/HVALS/HGETALL/SUNION/SINTER/SDIFF 排序后比集合(补差分刻意跳过的洞) | ✅ 一致 |
+| **G SCAN 家族不变量** | `scan_invariant_test.go` | SCAN/SSCAN/HSCAN/ZSCAN 从 0 迭代回 0 **全覆盖、不重复**,累积集 == 种子集 == oracle 累积集 | ✅ 一致 |
+| **H 多 DB 隔离** | `multidb_test.go` | SELECT n 后键跨库不可见(pk 前缀隔离)对拍 | ✅ 逐字节一致(需 `-multi-db`) |
+| **I 单键寄存器安全** | `linearizability_test.go` | 16×40 并发 SET/GET,每次 GET 必为某次真实写入值(无撕裂/幻读);可线性化子集 | ✅ 无违例(多项写非原子仍属已知、不在此检) |
+| **J 命令覆盖扫射** | `coverage_sweep_test.go` | 二线命令(SETEX/GETSET/MSET/MSETNX/HMSET/HSETNX/HINCRBY/LINSERT/L{PUSH,POP}X/LTRIM/SMOVE/S*STORE/ZINCRBY/ZRANK/ZREVRANGE/ZREMRANGEBY*/EXISTS 多键/DEL 多键…)57 例广度对拍 | ✅ 一致 |
+
+**两处已知、经实测刻画的分歧(非 bug,平台/设计所限,均已记录)**:
+1. **浮点累加精度**:Redis 用 C `long double`(80 位)做 INCRBYFLOAT/ZINCRBY/HINCRBYFLOAT 累加,Go 只有 `float64`(64 位),结果在第 ~17 位有效数字分叉(如 `5003.1` vs `5003.10000000000000009`)。**直接分值存取/格式化逐字节一致**,仅累加分叉;测试改用 `eqFloatClose` 数值容差断言并记录。
+2. **TTL 亚秒精度**:redimos TTL 为**秒精度**(对齐 Pika v3.2.2),`PEXPIRE 200ms` 会向下取整、瞬时过期,与 Redis 毫秒精度不同。秒级过期两端一致。
+
+`I`(全量线性化,如 Porcupine 式历史检查器)覆盖任意历史属未来工作;当前 `I` 断言的是最能抓撕裂/幻读的单键寄存器安全性。
 
 ---
 
