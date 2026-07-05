@@ -114,19 +114,19 @@ func New(cfg Config) *Metrics {
 		qps: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "commands_total",
-			Help:      "Total number of commands processed, labeled by command name.",
-		}, []string{commandLabel}),
+			Help:      "Total number of commands processed, labeled by command name and family.",
+		}, []string{commandLabel, familyLabel}),
 		latency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: namespace,
 			Name:      "command_duration_seconds",
-			Help:      "Command handling latency in seconds, labeled by command name.",
+			Help:      "Command handling latency in seconds, labeled by command name and family.",
 			Buckets:   buckets,
-		}, []string{commandLabel}),
+		}, []string{commandLabel, familyLabel}),
 		errors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "command_errors_total",
-			Help:      "Total number of commands that returned an error, labeled by command name.",
-		}, []string{commandLabel}),
+			Help:      "Total number of commands that returned an error, labeled by command name, family, and RESP error class.",
+		}, []string{commandLabel, familyLabel, errorClassLabel}),
 	}
 
 	// The large-key interception count is surfaced as a GaugeFunc so it is read
@@ -176,14 +176,20 @@ func New(cfg Config) *Metrics {
 }
 
 // ObserveCommand records one processed command: it increments the per-command
-// call counter, observes the latency histogram, and, when isErr is true,
-// increments the per-command error counter. name should be the lowercased
+// call counter, observes the latency histogram (both labeled by command name and
+// family), and, when isErr is true, increments the error counter labeled by name,
+// family, and the RESP error class (errClass, e.g. "WRONGTYPE"/"ERR"/"NOAUTH"). An
+// empty errClass on an error defaults to "ERR". name should be the lowercased
 // command name so labels stay bounded and consistent with the command table.
-func (m *Metrics) ObserveCommand(name string, dur time.Duration, isErr bool) {
-	m.qps.WithLabelValues(name).Inc()
-	m.latency.WithLabelValues(name).Observe(dur.Seconds())
+func (m *Metrics) ObserveCommand(name string, dur time.Duration, isErr bool, errClass string) {
+	family := commandFamily(name)
+	m.qps.WithLabelValues(name, family).Inc()
+	m.latency.WithLabelValues(name, family).Observe(dur.Seconds())
 	if isErr {
-		m.errors.WithLabelValues(name).Inc()
+		if errClass == "" {
+			errClass = "ERR"
+		}
+		m.errors.WithLabelValues(name, family, errClass).Inc()
 	}
 }
 

@@ -69,9 +69,9 @@ func TestInfoUnknownSectionIsEmpty(t *testing.T) {
 
 func TestInfoSummarisesCommandTotalsFromMetrics(t *testing.T) {
 	m := metrics.New(metrics.Config{})
-	m.ObserveCommand("get", time.Millisecond, false)
-	m.ObserveCommand("set", time.Millisecond, false)
-	m.ObserveCommand("get", time.Millisecond, true)
+	m.ObserveCommand("get", time.Millisecond, false, "")
+	m.ObserveCommand("set", time.Millisecond, false, "")
+	m.ObserveCommand("get", time.Millisecond, true, "ERR")
 
 	body := infoBody(t, Storage{Metrics: m}, "INFO")
 	if !strings.Contains(body, "total_commands_processed:3") {

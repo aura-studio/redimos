@@ -71,9 +71,9 @@ func TestObserveCommandIncrementsCountersAndHistogram(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m := New(Config{Registry: reg})
 
-	m.ObserveCommand("get", 2*time.Millisecond, false)
-	m.ObserveCommand("get", 4*time.Millisecond, false)
-	m.ObserveCommand("get", 6*time.Millisecond, true) // one error
+	m.ObserveCommand("get", 2*time.Millisecond, false, "")
+	m.ObserveCommand("get", 4*time.Millisecond, false, "")
+	m.ObserveCommand("get", 6*time.Millisecond, true, "ERR") // one error
 
 	if got := counterFor(gatherMetric(t, reg, "redimos_commands_total"), "get"); got != 3 {
 		t.Errorf("commands_total{command=get} = %v, want 3", got)
@@ -95,8 +95,8 @@ func TestObserveCommandSeparatesLabels(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m := New(Config{Registry: reg})
 
-	m.ObserveCommand("get", time.Millisecond, false)
-	m.ObserveCommand("set", time.Millisecond, true)
+	m.ObserveCommand("get", time.Millisecond, false, "")
+	m.ObserveCommand("set", time.Millisecond, true, "WRONGTYPE")
 
 	total := gatherMetric(t, reg, "redimos_commands_total")
 	if got := counterFor(total, "get"); got != 1 {

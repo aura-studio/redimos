@@ -52,9 +52,8 @@ func clampBatchSize(n int) int {
 	return n
 }
 
-func (s *redimoStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
-	// ctx is accepted by the seam but not yet threaded down.
-	newCount, err := s.client.EnsureType(pk, redimo.KeyType(expected), cntDelta)
+func (s *redimoStore) EnsureType(ctx context.Context, pk, expected string, cntDelta int64) (int64, error) {
+	newCount, err := s.client.WithContext(ctx).EnsureType(pk, redimo.KeyType(expected), cntDelta)
 	if errors.Is(err, redimo.ErrWrongType) {
 		return 0, ErrWrongType
 	}
@@ -62,16 +61,15 @@ func (s *redimoStore) EnsureType(_ context.Context, pk, expected string, cntDelt
 	return newCount, err
 }
 
-func (s *redimoStore) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo uses
-	// context.TODO() internally. The single conditional meta write claims a
-	// logically-absent (or expired) key atomically; created=false means the key is
-	// live, which is not an error for SETNX.
-	return s.client.CreateTypeIfAbsent(pk, redimo.KeyType(expected), cntDelta, nowEpoch)
+func (s *redimoStore) CreateTypeIfAbsent(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
+	// The single conditional meta write claims a logically-absent (or expired) key
+	// atomically; created=false means the key is live, which is not an error for
+	// SETNX.
+	return s.client.WithContext(ctx).CreateTypeIfAbsent(pk, redimo.KeyType(expected), cntDelta, nowEpoch)
 }
 
-func (s *redimoStore) LoadMeta(_ context.Context, pk string) (Meta, bool, error) {
-	m, found, err := s.client.LoadMeta(pk)
+func (s *redimoStore) LoadMeta(ctx context.Context, pk string) (Meta, bool, error) {
+	m, found, err := s.client.WithContext(ctx).LoadMeta(pk)
 	if err != nil || !found {
 		return Meta{}, found, err
 	}
@@ -79,32 +77,28 @@ func (s *redimoStore) LoadMeta(_ context.Context, pk string) (Meta, bool, error)
 	return Meta{Type: string(m.Type), Exp: m.Exp, Count: m.Count}, true, nil
 }
 
-func (s *redimoStore) SetExpire(_ context.Context, pk string, expEpoch int64) (bool, error) {
-	return s.client.SetExpire(pk, expEpoch)
+func (s *redimoStore) SetExpire(ctx context.Context, pk string, expEpoch int64) (bool, error) {
+	return s.client.WithContext(ctx).SetExpire(pk, expEpoch)
 }
 
-func (s *redimoStore) Persist(_ context.Context, pk string) (bool, error) {
-	return s.client.Persist(pk)
+func (s *redimoStore) Persist(ctx context.Context, pk string) (bool, error) {
+	return s.client.WithContext(ctx).Persist(pk)
 }
 
-func (s *redimoStore) DeleteMeta(_ context.Context, pk string) (bool, error) {
-	return s.client.DeleteMeta(pk)
+func (s *redimoStore) DeleteMeta(ctx context.Context, pk string) (bool, error) {
+	return s.client.WithContext(ctx).DeleteMeta(pk)
 }
 
-func (s *redimoStore) DeleteMetaIfEmpty(_ context.Context, pk string) (bool, error) {
-	return s.client.DeleteMetaIfEmpty(pk)
+func (s *redimoStore) DeleteMetaIfEmpty(ctx context.Context, pk string) (bool, error) {
+	return s.client.WithContext(ctx).DeleteMetaIfEmpty(pk)
 }
 
-func (s *redimoStore) DeleteMembers(_ context.Context, pk string) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	return s.client.DeleteMembers(pk, s.deleteBatchSize)
+func (s *redimoStore) DeleteMembers(ctx context.Context, pk string) (int, error) {
+	return s.client.WithContext(ctx).DeleteMembers(pk, s.deleteBatchSize)
 }
 
-func (s *redimoStore) SweepOrphans(_ context.Context) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	return s.client.SweepOrphans(s.deleteBatchSize)
+func (s *redimoStore) SweepOrphans(ctx context.Context) (int, error) {
+	return s.client.WithContext(ctx).SweepOrphans(s.deleteBatchSize)
 }
 
 // casRetry runs the bounded optimistic-concurrency (compare-and-set) loop shared

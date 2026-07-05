@@ -28,6 +28,13 @@ type Conn struct {
 	// handler returns (Errored).
 	errored bool
 
+	// errClass records the RESP error code of the current command's error reply —
+	// the first whitespace-delimited token after the leading '-', e.g. "WRONGTYPE",
+	// "ERR", "NOAUTH". Empty when the command did not error. Reset per command
+	// alongside errored and read via ErrorClass so the dispatcher can label the
+	// error metric by class without the handlers reporting back.
+	errClass string
+
 	// authed reports whether the connection has successfully AUTHed. When
 	// requirepass is unset the connection is considered authed from the start
 	// (the handshake layer, task 6.1, decides the initial value); the shell
@@ -56,7 +63,7 @@ func newConn(rc redcon.Conn, instID string) *Conn {
 		instID: instID,
 	}
 	if rc != nil {
-		c.wrapped = observingConn{Conn: rc, errored: &c.errored}
+		c.wrapped = observingConn{Conn: rc, errored: &c.errored, errClass: &c.errClass}
 	}
 	return c
 }
@@ -74,27 +81,58 @@ func (c *Conn) Redcon() redcon.Conn {
 // Errored reports whether the current command has written an error reply.
 func (c *Conn) Errored() bool { return c.errored }
 
-// ResetErrored clears the error flag; the dispatcher calls it before each command.
-func (c *Conn) ResetErrored() { c.errored = false }
+// ErrorClass returns the RESP error code of the current command's error reply
+// (e.g. "WRONGTYPE", "ERR", "NOAUTH"), or "" when the command did not error.
+func (c *Conn) ErrorClass() string { return c.errClass }
 
-// observingConn wraps a redcon.Conn and flips *errored when an error reply is
-// written — either the raw "-...\r\n" bytes that resp.Writer flushes via WriteRaw,
-// or a direct redcon WriteError. All other methods are promoted unchanged.
+// ResetErrored clears the error flag and class; the dispatcher calls it before each
+// command.
+func (c *Conn) ResetErrored() {
+	c.errored = false
+	c.errClass = ""
+}
+
+// observingConn wraps a redcon.Conn and, when an error reply is written — either the
+// raw "-...\r\n" bytes that resp.Writer flushes via WriteRaw, or a direct redcon
+// WriteError — flips *errored and records the error code in *errClass. All other
+// methods are promoted unchanged.
 type observingConn struct {
 	redcon.Conn
-	errored *bool
+	errored  *bool
+	errClass *string
 }
 
 func (o observingConn) WriteRaw(p []byte) {
 	if len(p) > 0 && p[0] == '-' {
 		*o.errored = true
+		*o.errClass = errCodeFromReply(p[1:])
 	}
 	o.Conn.WriteRaw(p)
 }
 
 func (o observingConn) WriteError(msg string) {
 	*o.errored = true
+	*o.errClass = errCodeFromReply([]byte(msg))
 	o.Conn.WriteError(msg)
+}
+
+// errCodeFromReply extracts the error code — the first whitespace/CRLF-delimited
+// token — from a RESP error payload (the bytes after the leading '-', or a
+// WriteError message), e.g. "WRONGTYPE Operation ..." -> "WRONGTYPE". Redis error
+// codes are a small fixed set, so this keeps the error-class label low-cardinality.
+// It returns "ERR" as a safe default when no token is present.
+func errCodeFromReply(b []byte) string {
+	end := len(b)
+	for i := 0; i < len(b); i++ {
+		if ch := b[i]; ch == ' ' || ch == '\r' || ch == '\n' {
+			end = i
+			break
+		}
+	}
+	if end == 0 {
+		return "ERR"
+	}
+	return string(b[:end])
 }
 
 // Authed reports whether the connection has authenticated.

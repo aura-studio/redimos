@@ -13,17 +13,14 @@ func (s *redimoStore) ScanKeys(ctx context.Context, lek map[string]types.Attribu
 	return s.client.WithContext(ctx).ScanMetaKeys(limit, lek, now)
 }
 
-func (s *redimoStore) HScan(_ context.Context, pk string, lek map[string]types.AttributeValue, limit int32) ([]HField, map[string]types.AttributeValue, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	//
+func (s *redimoStore) HScan(ctx context.Context, pk string, lek map[string]types.AttributeValue, limit int32) ([]HField, map[string]types.AttributeValue, error) {
 	// HScanPage Queries WITHIN the single partition and returns one page of field
 	// items, already excluding the reserved meta item (sk == MetaSK). Each field's
 	// value is read back as opaque bytes exactly as HGet/HGetAll do, so HSCAN
 	// round-trips arbitrary field values. The MATCH filter on the field name is
 	// applied proxy-side by the command layer, and the nextLEK token is bridged to
 	// a uint64 cursor by the SCAN registry the HSCAN handler shares with SCAN.
-	page, nextLEK, err := s.client.HScanPage(pk, limit, lek)
+	page, nextLEK, err := s.client.WithContext(ctx).HScanPage(pk, limit, lek)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -36,10 +33,7 @@ func (s *redimoStore) HScan(_ context.Context, pk string, lek map[string]types.A
 	return fields, nextLEK, nil
 }
 
-func (s *redimoStore) SScan(_ context.Context, pk string, lek map[string]types.AttributeValue, limit int32) ([]string, map[string]types.AttributeValue, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	//
+func (s *redimoStore) SScan(ctx context.Context, pk string, lek map[string]types.AttributeValue, limit int32) ([]string, map[string]types.AttributeValue, error) {
 	// A Set stores each member as a sort-key item under the pk exactly like a Hash
 	// stores each field, so SSCAN reuses the fork's single-partition page primitive
 	// (HScanPage) and keeps only the member NAME (the item's sort key) — a set
@@ -48,7 +42,7 @@ func (s *redimoStore) SScan(_ context.Context, pk string, lek map[string]types.A
 	// filter on the member name is applied proxy-side by the command layer, and the
 	// nextLEK token is bridged to a uint64 cursor by the SCAN registry the SSCAN
 	// handler shares with SCAN.
-	page, nextLEK, err := s.client.HScanPage(pk, limit, lek)
+	page, nextLEK, err := s.client.WithContext(ctx).HScanPage(pk, limit, lek)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -61,10 +55,7 @@ func (s *redimoStore) SScan(_ context.Context, pk string, lek map[string]types.A
 	return members, nextLEK, nil
 }
 
-func (s *redimoStore) ZScan(_ context.Context, pk string, lek map[string]types.AttributeValue, limit int32) ([]ZMember, map[string]types.AttributeValue, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	//
+func (s *redimoStore) ZScan(ctx context.Context, pk string, lek map[string]types.AttributeValue, limit int32) ([]ZMember, map[string]types.AttributeValue, error) {
 	// A Sorted Set stores each member as a sort-key item under the pk with its
 	// score in the numeric sort-key attribute (skN), so ZSCAN reuses the fork's
 	// single-partition page primitive dedicated to sorted sets (ZScanPage), which
@@ -75,7 +66,7 @@ func (s *redimoStore) ZScan(_ context.Context, pk string, lek map[string]types.A
 	// guarantee. The MATCH filter on the member name is applied proxy-side by the
 	// command layer, and the nextLEK token is bridged to a uint64 cursor by the
 	// SCAN registry the ZSCAN handler shares with SCAN.
-	page, nextLEK, err := s.client.ZScanPage(pk, limit, lek)
+	page, nextLEK, err := s.client.WithContext(ctx).ZScanPage(pk, limit, lek)
 	if err != nil {
 		return nil, nil, err
 	}

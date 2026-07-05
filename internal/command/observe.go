@@ -49,7 +49,7 @@ func (o *ObservedDispatcher) Dispatch(ctx context.Context, c *server.Conn, args 
 
 	name := strings.ToLower(string(args[0]))
 	if o.metrics != nil {
-		o.metrics.ObserveCommand(name, dur, c.Errored())
+		o.metrics.ObserveCommand(name, dur, c.Errored(), c.ErrorClass())
 	}
 	if o.slowlog != nil && dur >= o.threshold {
 		o.slowlog.Record(metrics.SlowlogEntry{

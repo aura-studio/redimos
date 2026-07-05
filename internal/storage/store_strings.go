@@ -8,10 +8,8 @@ import (
 	redimo "github.com/aura-studio/redimo/v2"
 )
 
-func (s *redimoStore) GetString(_ context.Context, pk string) ([]byte, bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	rv, err := s.client.GET(pk)
+func (s *redimoStore) GetString(ctx context.Context, pk string) ([]byte, bool, error) {
+	rv, err := s.client.WithContext(ctx).GET(pk)
 	if err != nil || rv.Empty() {
 		return nil, false, err
 	}
@@ -19,10 +17,7 @@ func (s *redimoStore) GetString(_ context.Context, pk string) ([]byte, bool, err
 	return rv.Bytes(), true, nil
 }
 
-func (s *redimoStore) MGetStrings(_ context.Context, pks []string) (map[string][]byte, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	//
+func (s *redimoStore) MGetStrings(ctx context.Context, pks []string) (map[string][]byte, error) {
 	// BatchGET issues one DynamoDB BatchGetItem per 100 partition keys (chunking and
 	// UnprocessedKeys retry are handled inside the fork), de-duplicates keys, and
 	// returns a value only for pks that have a value item — so this is a true batched
@@ -31,7 +26,7 @@ func (s *redimoStore) MGetStrings(_ context.Context, pks []string) (map[string][
 	// String pks). Missing keys are simply absent from the map. It is NOT the
 	// transactional MGET (TransactGetItems): a plain multi-get needs no cross-key
 	// atomicity and BatchGetItem is cheaper and chunk-friendly.
-	rvs, err := s.client.BatchGET(pks...)
+	rvs, err := s.client.WithContext(ctx).BatchGET(pks...)
 	if err != nil {
 		return nil, err
 	}
@@ -46,19 +41,16 @@ func (s *redimoStore) MGetStrings(_ context.Context, pks []string) (map[string][
 	return vals, nil
 }
 
-func (s *redimoStore) SetString(_ context.Context, pk string, val []byte) error {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Store the value as binary to keep Redis' strings
-	// binary-safe. The SET is unconditional; NX/XX/type conditions are decided by
-	// the meta layer before this call.
-	_, err := s.client.SET(pk, redimo.BytesValue{B: val})
+func (s *redimoStore) SetString(ctx context.Context, pk string, val []byte) error {
+	// Store the value as binary to keep Redis' strings binary-safe. The SET is
+	// unconditional; NX/XX/type conditions are decided by the meta layer before this
+	// call.
+	_, err := s.client.WithContext(ctx).SET(pk, redimo.BytesValue{B: val})
 	return err
 }
 
-func (s *redimoStore) GetSetString(_ context.Context, pk string, val []byte) ([]byte, bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	old, err := s.client.GETSET(pk, redimo.BytesValue{B: val})
+func (s *redimoStore) GetSetString(ctx context.Context, pk string, val []byte) ([]byte, bool, error) {
+	old, err := s.client.WithContext(ctx).GETSET(pk, redimo.BytesValue{B: val})
 	if err != nil || old.Empty() {
 		return nil, false, err
 	}
@@ -66,19 +58,15 @@ func (s *redimoStore) GetSetString(_ context.Context, pk string, val []byte) ([]
 	return old.Bytes(), true, nil
 }
 
-func (s *redimoStore) SetStringIfEquals(_ context.Context, pk string, newVal, oldVal []byte, oldExists bool) (bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. The compare-and-set is delegated to the fork's
-	// SETCAS, whose DynamoDB conditional expression asserts the value item still
-	// equals oldVal (or is still absent), so a concurrent writer's change makes the
-	// condition fail and SETCAS returns ok=false without writing.
-	return s.client.SETCAS(pk, redimo.BytesValue{B: newVal}, redimo.BytesValue{B: oldVal}, oldExists)
+func (s *redimoStore) SetStringIfEquals(ctx context.Context, pk string, newVal, oldVal []byte, oldExists bool) (bool, error) {
+	// The compare-and-set is delegated to the fork's SETCAS, whose DynamoDB
+	// conditional expression asserts the value item still equals oldVal (or is still
+	// absent), so a concurrent writer's change makes the condition fail and SETCAS
+	// returns ok=false without writing.
+	return s.client.WithContext(ctx).SETCAS(pk, redimo.BytesValue{B: newVal}, redimo.BytesValue{B: oldVal}, oldExists)
 }
 
-func (s *redimoStore) IncrBy(_ context.Context, pk string, delta int64) (newVal int64, err error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	//
+func (s *redimoStore) IncrBy(ctx context.Context, pk string, delta int64) (newVal int64, err error) {
 	// Read-modify-write reconciliation (see the Store interface doc): read the
 	// current binary value, parse it as a Redis integer, apply the delta, and store
 	// the decimal result back as the same binary attribute GET reads. The write is
@@ -88,8 +76,9 @@ func (s *redimoStore) IncrBy(_ context.Context, pk string, delta int64) (newVal 
 	// its delta on top of the winner's value (requirements 16.3, 16.4). A run that
 	// exhausts the retry bound surfaces ErrRMWMaxRetries (from casRetry), with
 	// newVal left at its zero value.
+	cl := s.client.WithContext(ctx)
 	err = casRetry(func() (bool, error) {
-		rv, gerr := s.client.GET(pk)
+		rv, gerr := cl.GET(pk)
 		if gerr != nil {
 			return false, gerr
 		}
@@ -110,7 +99,7 @@ func (s *redimoStore) IncrBy(_ context.Context, pk string, delta int64) (newVal 
 		}
 		next := cur + delta
 
-		ok, serr := s.client.SETCAS(pk, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, redimo.BytesValue{B: oldVal}, oldExists)
+		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, redimo.BytesValue{B: oldVal}, oldExists)
 		if serr != nil {
 			return false, serr
 		}
@@ -124,13 +113,13 @@ func (s *redimoStore) IncrBy(_ context.Context, pk string, delta int64) (newVal 
 	return newVal, err
 }
 
-func (s *redimoStore) IncrByFloat(_ context.Context, pk string, delta float64) (newVal []byte, err error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Read-modify-write reconciliation as for IncrBy,
-	// driven by the same casRetry compare-and-set loop so concurrent INCRBYFLOAT on
-	// one key cannot lose an update (requirements 16.3, 16.4).
+func (s *redimoStore) IncrByFloat(ctx context.Context, pk string, delta float64) (newVal []byte, err error) {
+	// Read-modify-write reconciliation as for IncrBy, driven by the same casRetry
+	// compare-and-set loop so concurrent INCRBYFLOAT on one key cannot lose an update
+	// (requirements 16.3, 16.4).
+	cl := s.client.WithContext(ctx)
 	err = casRetry(func() (bool, error) {
-		rv, gerr := s.client.GET(pk)
+		rv, gerr := cl.GET(pk)
 		if gerr != nil {
 			return false, gerr
 		}
@@ -152,7 +141,7 @@ func (s *redimoStore) IncrByFloat(_ context.Context, pk string, delta float64) (
 		}
 
 		out := formatRedisFloat(next)
-		ok, serr := s.client.SETCAS(pk, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, oldExists)
+		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, oldExists)
 		if serr != nil {
 			return false, serr
 		}

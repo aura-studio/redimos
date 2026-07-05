@@ -11,11 +11,10 @@
 // / DeleteMeta). Data-structure operations (Strings/Hashes/Lists/Sets/SortedSets)
 // are added to this interface by the later command tasks (tasks 9–16).
 //
-// ctx note: the redimo fork's v1.7 meta methods currently call context.TODO()
-// internally and do not yet accept a context. The Store methods accept a ctx now
-// so the proxy API is context-aware from the start; the ctx is not yet threaded
-// all the way down into redimo. Once the fork's methods take a context, the
-// redimo-backed implementation can pass it through without changing this seam.
+// ctx note: the Store methods accept a ctx so the proxy API is context-aware,
+// and the redimo-backed implementation threads that ctx down to redimo via
+// redimo.Client.WithContext(ctx), so a request's cancellation/deadline reaches
+// the DynamoDB calls.
 package storage
 
 import (

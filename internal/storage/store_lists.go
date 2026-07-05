@@ -27,11 +27,10 @@ import (
 // the shared ZNormalizeRankRange helper, the same approach the Sorted Set reads
 // use.
 
-func (s *redimoStore) LPush(_ context.Context, pk string, elements [][]byte) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Elements are passed as binary-safe BytesValue (as
-	// the String/Hash/Set families do), matching redimo v2.1's binary-tolerant list
-	// element handling; every element is pushed, so the net cnt delta is len(elements).
+func (s *redimoStore) LPush(ctx context.Context, pk string, elements [][]byte) (int, error) {
+	// Elements are passed as binary-safe BytesValue (as the String/Hash/Set families
+	// do), matching redimo v2.1's binary-tolerant list element handling; every
+	// element is pushed, so the net cnt delta is len(elements).
 	if len(elements) == 0 {
 		return 0, nil
 	}
@@ -41,16 +40,15 @@ func (s *redimoStore) LPush(_ context.Context, pk string, elements [][]byte) (in
 		vals[i] = redimo.BytesValue{B: e}
 	}
 
-	if _, err := s.client.LPUSH(pk, vals...); err != nil {
+	if _, err := s.client.WithContext(ctx).LPUSH(pk, vals...); err != nil {
 		return 0, err
 	}
 
 	return len(elements), nil
 }
 
-func (s *redimoStore) RPush(_ context.Context, pk string, elements [][]byte) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Elements are passed as BytesValue as for LPush.
+func (s *redimoStore) RPush(ctx context.Context, pk string, elements [][]byte) (int, error) {
+	// Elements are passed as BytesValue as for LPush.
 	if len(elements) == 0 {
 		return 0, nil
 	}
@@ -60,17 +58,16 @@ func (s *redimoStore) RPush(_ context.Context, pk string, elements [][]byte) (in
 		vals[i] = redimo.BytesValue{B: e}
 	}
 
-	if _, err := s.client.RPUSH(pk, vals...); err != nil {
+	if _, err := s.client.WithContext(ctx).RPUSH(pk, vals...); err != nil {
 		return 0, err
 	}
 
 	return len(elements), nil
 }
 
-func (s *redimoStore) LPop(_ context.Context, pk string) ([]byte, bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. An empty ReturnValue means the list is empty.
-	rv, err := s.client.LPOP(pk)
+func (s *redimoStore) LPop(ctx context.Context, pk string) ([]byte, bool, error) {
+	// An empty ReturnValue means the list is empty.
+	rv, err := s.client.WithContext(ctx).LPOP(pk)
 	if err != nil || rv.Empty() {
 		return nil, false, err
 	}
@@ -78,10 +75,8 @@ func (s *redimoStore) LPop(_ context.Context, pk string) ([]byte, bool, error) {
 	return []byte(rv.String()), true, nil
 }
 
-func (s *redimoStore) RPop(_ context.Context, pk string) ([]byte, bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	rv, err := s.client.RPOP(pk)
+func (s *redimoStore) RPop(ctx context.Context, pk string) ([]byte, bool, error) {
+	rv, err := s.client.WithContext(ctx).RPOP(pk)
 	if err != nil || rv.Empty() {
 		return nil, false, err
 	}
@@ -94,8 +89,8 @@ func (s *redimoStore) RPop(_ context.Context, pk string) ([]byte, bool, error) {
 // but because the underlying score-index query never includes the meta item, the
 // call still returns exactly the real elements in order (the inflated stop only
 // raises the query limit). It is the base LRange/LIndex slice in process.
-func (s *redimoStore) lAll(pk string) ([][]byte, error) {
-	rvs, err := s.client.LRANGE(pk, 0, -1)
+func (s *redimoStore) lAll(ctx context.Context, pk string) ([][]byte, error) {
+	rvs, err := s.client.WithContext(ctx).LRANGE(pk, 0, -1)
 	if err != nil {
 		return nil, err
 	}
@@ -108,14 +103,14 @@ func (s *redimoStore) lAll(pk string) ([][]byte, error) {
 	return out, nil
 }
 
-func (s *redimoStore) LRange(_ context.Context, pk string, start, stop int) ([][]byte, error) {
+func (s *redimoStore) LRange(ctx context.Context, pk string, start, stop int) ([][]byte, error) {
 	// Push the range to the fork's bounded LRANGE (a score-index Query limited to the
 	// requested window) instead of reading the whole list and slicing in process:
 	// LRANGE key 0 9 on a million-element list now reads ~10 elements, not a million.
 	// Lists have no tie-break subtlety (elements are ordered by their insertion-time
 	// score index, not by member bytes), so the fork's negative-index + clamp rules
 	// match Redis exactly — this is a pure cost win with identical results.
-	rvs, err := s.client.LRANGE(pk, int64(start), int64(stop))
+	rvs, err := s.client.WithContext(ctx).LRANGE(pk, int64(start), int64(stop))
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +126,8 @@ func (s *redimoStore) LRange(_ context.Context, pk string, start, stop int) ([][
 	return out, nil
 }
 
-func (s *redimoStore) LIndex(_ context.Context, pk string, index int) ([]byte, bool, error) {
-	all, err := s.lAll(pk)
+func (s *redimoStore) LIndex(ctx context.Context, pk string, index int) ([]byte, bool, error) {
+	all, err := s.lAll(ctx, pk)
 	if err != nil {
 		return nil, false, err
 	}
@@ -148,10 +143,10 @@ func (s *redimoStore) LIndex(_ context.Context, pk string, index int) ([]byte, b
 	return all[index], true, nil
 }
 
-func (s *redimoStore) LRangeAll(_ context.Context, pk string) ([][]byte, error) {
+func (s *redimoStore) LRangeAll(ctx context.Context, pk string) ([][]byte, error) {
 	// The whole list in head-to-tail order, the base slice the command layer's
 	// LSET/LTRIM/LREM/LINSERT combined implementation reads before rewriting.
-	return s.lAll(pk)
+	return s.lAll(ctx, pk)
 }
 
 func (s *redimoStore) LReplaceAll(ctx context.Context, pk string, elements [][]byte) (int, error) {

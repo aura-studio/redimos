@@ -17,10 +17,7 @@ import (
 // (HGetAll/HKeys/HVals) exclude the reserved meta item (sk == redimo.MetaSK) so
 // it is never surfaced as a hash field.
 
-func (s *redimoStore) HSet(_ context.Context, pk string, fields []HField) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	//
+func (s *redimoStore) HSet(ctx context.Context, pk string, fields []HField) (int, error) {
 	// Build a field->Value map (binary values) and hand it to the fork's HSET,
 	// which reports the fields that were newly created via ReturnValue ALL_OLD
 	// (an item with no prior attributes was new). The count of newly-created
@@ -34,7 +31,7 @@ func (s *redimoStore) HSet(_ context.Context, pk string, fields []HField) (int, 
 		m[f.Field] = redimo.BytesValue{B: f.Value}
 	}
 
-	newly, err := s.client.HSET(pk, m)
+	newly, err := s.client.WithContext(ctx).HSET(pk, m)
 	if err != nil {
 		return 0, err
 	}
@@ -42,17 +39,14 @@ func (s *redimoStore) HSet(_ context.Context, pk string, fields []HField) (int, 
 	return len(newly), nil
 }
 
-func (s *redimoStore) HSetNX(_ context.Context, pk, field string, val []byte) (bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. HSETNX conditions on attribute_not_exists(pk),
-	// so ok reports whether the field was created.
-	return s.client.HSETNX(pk, field, redimo.BytesValue{B: val})
+func (s *redimoStore) HSetNX(ctx context.Context, pk, field string, val []byte) (bool, error) {
+	// HSETNX conditions on attribute_not_exists(pk), so ok reports whether the field
+	// was created.
+	return s.client.WithContext(ctx).HSETNX(pk, field, redimo.BytesValue{B: val})
 }
 
-func (s *redimoStore) HGet(_ context.Context, pk, field string) ([]byte, bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	rv, err := s.client.HGET(pk, field)
+func (s *redimoStore) HGet(ctx context.Context, pk, field string) ([]byte, bool, error) {
+	rv, err := s.client.WithContext(ctx).HGET(pk, field)
 	if err != nil || rv.Empty() {
 		return nil, false, err
 	}
@@ -60,15 +54,14 @@ func (s *redimoStore) HGet(_ context.Context, pk, field string) ([]byte, bool, e
 	return rv.Bytes(), true, nil
 }
 
-func (s *redimoStore) HMGet(_ context.Context, pk string, fields []string) (map[string][]byte, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Only present fields are returned; the caller
-	// renders a missing field as a null bulk string in request order.
+func (s *redimoStore) HMGet(ctx context.Context, pk string, fields []string) (map[string][]byte, error) {
+	// Only present fields are returned; the caller renders a missing field as a null
+	// bulk string in request order.
 	if len(fields) == 0 {
 		return map[string][]byte{}, nil
 	}
 
-	rvs, err := s.client.HMGET(pk, fields...)
+	rvs, err := s.client.WithContext(ctx).HMGET(pk, fields...)
 	if err != nil {
 		return nil, err
 	}
@@ -83,12 +76,10 @@ func (s *redimoStore) HMGet(_ context.Context, pk string, fields []string) (map[
 	return out, nil
 }
 
-func (s *redimoStore) HGetAll(_ context.Context, pk string) ([]HField, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. The fork's HGETALL queries the whole partition,
-	// which includes the reserved meta item; filter it out so it is never surfaced
-	// as a field.
-	all, err := s.client.HGETALL(pk)
+func (s *redimoStore) HGetAll(ctx context.Context, pk string) ([]HField, error) {
+	// The fork's HGETALL queries the whole partition, which includes the reserved
+	// meta item; filter it out so it is never surfaced as a field.
+	all, err := s.client.WithContext(ctx).HGETALL(pk)
 	if err != nil {
 		return nil, err
 	}
@@ -134,16 +125,15 @@ func (s *redimoStore) HVals(ctx context.Context, pk string) ([][]byte, error) {
 	return vals, nil
 }
 
-func (s *redimoStore) HDel(_ context.Context, pk string, fields []string) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. The fork's HDEL returns the fields that actually
-	// existed and were removed (a field deleted twice counts once), so its length
-	// is the removal count the caller negates into the cnt delta.
+func (s *redimoStore) HDel(ctx context.Context, pk string, fields []string) (int, error) {
+	// The fork's HDEL returns the fields that actually existed and were removed (a
+	// field deleted twice counts once), so its length is the removal count the caller
+	// negates into the cnt delta.
 	if len(fields) == 0 {
 		return 0, nil
 	}
 
-	deleted, err := s.client.HDEL(pk, fields...)
+	deleted, err := s.client.WithContext(ctx).HDEL(pk, fields...)
 	if err != nil {
 		return 0, err
 	}
@@ -151,17 +141,13 @@ func (s *redimoStore) HDel(_ context.Context, pk string, fields []string) (int, 
 	return len(deleted), nil
 }
 
-func (s *redimoStore) HExists(_ context.Context, pk, field string) (bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	return s.client.HEXISTS(pk, field)
+func (s *redimoStore) HExists(ctx context.Context, pk, field string) (bool, error) {
+	return s.client.WithContext(ctx).HEXISTS(pk, field)
 }
 
-func (s *redimoStore) HStrlen(_ context.Context, pk, field string) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Length is derived from the stored bytes; a
-	// missing field is length 0.
-	rv, err := s.client.HGET(pk, field)
+func (s *redimoStore) HStrlen(ctx context.Context, pk, field string) (int, error) {
+	// Length is derived from the stored bytes; a missing field is length 0.
+	rv, err := s.client.WithContext(ctx).HGET(pk, field)
 	if err != nil || rv.Empty() {
 		return 0, err
 	}
@@ -169,10 +155,7 @@ func (s *redimoStore) HStrlen(_ context.Context, pk, field string) (int, error) 
 	return len(rv.Bytes()), nil
 }
 
-func (s *redimoStore) HIncrBy(_ context.Context, pk, field string, delta int64) (newVal int64, isNew bool, err error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	//
+func (s *redimoStore) HIncrBy(ctx context.Context, pk, field string, delta int64) (newVal int64, isNew bool, err error) {
 	// Read-modify-write reconciliation driven by a compare-and-set retry loop,
 	// mirroring the String INCR family (IncrBy): HGET the current binary field
 	// value, parse it as a Redis integer, apply the delta, and conditionally HSET
@@ -183,8 +166,9 @@ func (s *redimoStore) HIncrBy(_ context.Context, pk, field string, delta int64) 
 	// created the field so the caller bumps cnt only for a brand-new field; it
 	// reflects the pre-state observed on the winning attempt. A run that exhausts
 	// the retry bound surfaces ErrRMWMaxRetries.
+	cl := s.client.WithContext(ctx)
 	err = casRetry(func() (bool, error) {
-		rv, gerr := s.client.HGET(pk, field)
+		rv, gerr := cl.HGET(pk, field)
 		if gerr != nil {
 			return false, gerr
 		}
@@ -207,7 +191,7 @@ func (s *redimoStore) HIncrBy(_ context.Context, pk, field string, delta int64) 
 		}
 		next := cur + delta
 
-		ok, serr := s.client.HSETCAS(pk, field, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, redimo.BytesValue{B: oldVal}, existed)
+		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, redimo.BytesValue{B: oldVal}, existed)
 		if serr != nil {
 			return false, serr
 		}
@@ -222,13 +206,13 @@ func (s *redimoStore) HIncrBy(_ context.Context, pk, field string, delta int64) 
 	return newVal, isNew, err
 }
 
-func (s *redimoStore) HIncrByFloat(_ context.Context, pk, field string, delta float64) (newVal []byte, isNew bool, err error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. Read-modify-write reconciliation as for HIncrBy:
-	// the HGET → HSETCAS compare-and-set loop makes concurrent HINCRBYFLOAT on one
-	// field lose no update (requirements 16.3, 16.4).
+func (s *redimoStore) HIncrByFloat(ctx context.Context, pk, field string, delta float64) (newVal []byte, isNew bool, err error) {
+	// Read-modify-write reconciliation as for HIncrBy: the HGET → HSETCAS
+	// compare-and-set loop makes concurrent HINCRBYFLOAT on one field lose no update
+	// (requirements 16.3, 16.4).
+	cl := s.client.WithContext(ctx)
 	err = casRetry(func() (bool, error) {
-		rv, gerr := s.client.HGET(pk, field)
+		rv, gerr := cl.HGET(pk, field)
 		if gerr != nil {
 			return false, gerr
 		}
@@ -252,7 +236,7 @@ func (s *redimoStore) HIncrByFloat(_ context.Context, pk, field string, delta fl
 		}
 
 		out := formatRedisFloat(next)
-		ok, serr := s.client.HSETCAS(pk, field, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, existed)
+		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, existed)
 		if serr != nil {
 			return false, serr
 		}

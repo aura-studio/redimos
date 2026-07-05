@@ -19,15 +19,14 @@ import (
 // the reserved item can never be popped or returned, and so Redis' count
 // semantics (distinct vs with-repeats) are honoured exactly.
 
-func (s *redimoStore) SAdd(_ context.Context, pk string, members []string) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. The fork's SADD returns the members that did not
-	// already exist, so its length is the net cnt delta the caller applies.
+func (s *redimoStore) SAdd(ctx context.Context, pk string, members []string) (int, error) {
+	// The fork's SADD returns the members that did not already exist, so its length
+	// is the net cnt delta the caller applies.
 	if len(members) == 0 {
 		return 0, nil
 	}
 
-	added, err := s.client.SADD(pk, members...)
+	added, err := s.client.WithContext(ctx).SADD(pk, members...)
 	if err != nil {
 		return 0, err
 	}
@@ -35,16 +34,15 @@ func (s *redimoStore) SAdd(_ context.Context, pk string, members []string) (int,
 	return len(added), nil
 }
 
-func (s *redimoStore) SRem(_ context.Context, pk string, members []string) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. The fork's SREM returns the members that actually
-	// existed and were removed (a member listed twice counts once), so its length
-	// is the removal count the caller negates into the cnt delta.
+func (s *redimoStore) SRem(ctx context.Context, pk string, members []string) (int, error) {
+	// The fork's SREM returns the members that actually existed and were removed (a
+	// member listed twice counts once), so its length is the removal count the caller
+	// negates into the cnt delta.
 	if len(members) == 0 {
 		return 0, nil
 	}
 
-	removed, err := s.client.SREM(pk, members...)
+	removed, err := s.client.WithContext(ctx).SREM(pk, members...)
 	if err != nil {
 		return 0, err
 	}
@@ -52,18 +50,14 @@ func (s *redimoStore) SRem(_ context.Context, pk string, members []string) (int,
 	return len(removed), nil
 }
 
-func (s *redimoStore) SIsMember(_ context.Context, pk, member string) (bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	return s.client.SISMEMBER(pk, member)
+func (s *redimoStore) SIsMember(ctx context.Context, pk, member string) (bool, error) {
+	return s.client.WithContext(ctx).SISMEMBER(pk, member)
 }
 
-func (s *redimoStore) SMembers(_ context.Context, pk string) ([]string, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. The fork's SMEMBERS queries the whole partition,
-	// which includes the reserved meta item; filter it out so it is never surfaced
-	// as a member.
-	all, err := s.client.SMEMBERS(pk)
+func (s *redimoStore) SMembers(ctx context.Context, pk string) ([]string, error) {
+	// The fork's SMEMBERS queries the whole partition, which includes the reserved
+	// meta item; filter it out so it is never surfaced as a member.
+	all, err := s.client.WithContext(ctx).SMEMBERS(pk)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +96,7 @@ func (s *redimoStore) SPop(ctx context.Context, pk string, count int) ([]string,
 		return nil, nil
 	}
 
-	removed, err := s.client.SREM(pk, chosen...)
+	removed, err := s.client.WithContext(ctx).SREM(pk, chosen...)
 	if err != nil {
 		return nil, err
 	}

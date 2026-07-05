@@ -19,13 +19,11 @@ import (
 // the two implementations stay behaviourally identical. Scores round-trip as the
 // fork's 17-significant-digit N encoding.
 
-func (s *redimoStore) ZAdd(_ context.Context, pk string, members []ZMember) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. The fork's ZADD sets skN = score unconditionally
-	// (updating an existing member's score) and returns the members that did not
-	// already exist, so its length is the net cnt delta the caller applies. A
-	// member repeated in the input collapses in the map (last score wins) and is
-	// counted at most once.
+func (s *redimoStore) ZAdd(ctx context.Context, pk string, members []ZMember) (int, error) {
+	// The fork's ZADD sets skN = score unconditionally (updating an existing member's
+	// score) and returns the members that did not already exist, so its length is the
+	// net cnt delta the caller applies. A member repeated in the input collapses in
+	// the map (last score wins) and is counted at most once.
 	if len(members) == 0 {
 		return 0, nil
 	}
@@ -35,7 +33,7 @@ func (s *redimoStore) ZAdd(_ context.Context, pk string, members []ZMember) (int
 		m[zm.Member] = zm.Score
 	}
 
-	added, err := s.client.ZADD(pk, m, redimo.Flags{})
+	added, err := s.client.WithContext(ctx).ZADD(pk, m, redimo.Flags{})
 	if err != nil {
 		return 0, err
 	}
@@ -43,16 +41,15 @@ func (s *redimoStore) ZAdd(_ context.Context, pk string, members []ZMember) (int
 	return len(added), nil
 }
 
-func (s *redimoStore) ZRem(_ context.Context, pk string, members []string) (int, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. The fork's ZREM returns the members that actually
-	// existed and were removed (a member listed twice counts once), so its length
-	// is the removal count the caller negates into the cnt delta.
+func (s *redimoStore) ZRem(ctx context.Context, pk string, members []string) (int, error) {
+	// The fork's ZREM returns the members that actually existed and were removed (a
+	// member listed twice counts once), so its length is the removal count the caller
+	// negates into the cnt delta.
 	if len(members) == 0 {
 		return 0, nil
 	}
 
-	removed, err := s.client.ZREM(pk, members...)
+	removed, err := s.client.WithContext(ctx).ZREM(pk, members...)
 	if err != nil {
 		return 0, err
 	}
@@ -60,23 +57,21 @@ func (s *redimoStore) ZRem(_ context.Context, pk string, members []string) (int,
 	return len(removed), nil
 }
 
-func (s *redimoStore) ZScore(_ context.Context, pk, member string) (float64, bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	return s.client.ZSCORE(pk, member)
+func (s *redimoStore) ZScore(ctx context.Context, pk, member string) (float64, bool, error) {
+	return s.client.WithContext(ctx).ZSCORE(pk, member)
 }
 
-func (s *redimoStore) ZIncrBy(_ context.Context, pk, member string, delta float64) (float64, bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. The fork's ZINCRBY does a native ADD on skN,
-	// initialising a missing member to 0; a prior ZSCORE tells us whether the
-	// member was brand-new so the caller bumps cnt only then.
-	_, found, err := s.client.ZSCORE(pk, member)
+func (s *redimoStore) ZIncrBy(ctx context.Context, pk, member string, delta float64) (float64, bool, error) {
+	// The fork's ZINCRBY does a native ADD on skN, initialising a missing member to
+	// 0; a prior ZSCORE tells us whether the member was brand-new so the caller bumps
+	// cnt only then.
+	cl := s.client.WithContext(ctx)
+	_, found, err := cl.ZSCORE(pk, member)
 	if err != nil {
 		return 0, false, err
 	}
 
-	newScore, err := s.client.ZINCRBY(pk, member, delta)
+	newScore, err := cl.ZINCRBY(pk, member, delta)
 	if err != nil {
 		return 0, false, err
 	}
@@ -97,8 +92,8 @@ func (s *redimoStore) ZIncrBy(_ context.Context, pk, member string, delta float6
 // command layer's --max-collection-result cap (rangeResultCount). Reads that CAN be
 // bounded without losing semantics are: single-member ZRank/ZRevRank (fork ZRANK,
 // count-by-score + tie group) and list LRange (fork LRANGE, windowed Query).
-func (s *redimoStore) zAscending(pk string) ([]ZMember, error) {
-	ms, err := s.client.ZMembersOrdered(pk, true)
+func (s *redimoStore) zAscending(ctx context.Context, pk string) ([]ZMember, error) {
+	ms, err := s.client.WithContext(ctx).ZMembersOrdered(pk, true)
 	if err != nil {
 		return nil, err
 	}
@@ -120,8 +115,8 @@ func (s *redimoStore) zAscending(pk string) ([]ZMember, error) {
 	return out, nil
 }
 
-func (s *redimoStore) ZRangeByRank(_ context.Context, pk string, start, stop int, rev bool) ([]ZMember, error) {
-	asc, err := s.zAscending(pk)
+func (s *redimoStore) ZRangeByRank(ctx context.Context, pk string, start, stop int, rev bool) ([]ZMember, error) {
+	asc, err := s.zAscending(ctx, pk)
 	if err != nil {
 		return nil, err
 	}
@@ -139,8 +134,8 @@ func (s *redimoStore) ZRangeByRank(_ context.Context, pk string, start, stop int
 	return append([]ZMember(nil), ordered[lo:hi+1]...), nil
 }
 
-func (s *redimoStore) ZRangeByScore(_ context.Context, pk string, min, max ScoreBound, rev bool) ([]ZMember, error) {
-	asc, err := s.zAscending(pk)
+func (s *redimoStore) ZRangeByScore(ctx context.Context, pk string, min, max ScoreBound, rev bool) ([]ZMember, error) {
+	asc, err := s.zAscending(ctx, pk)
 	if err != nil {
 		return nil, err
 	}
@@ -159,8 +154,8 @@ func (s *redimoStore) ZRangeByScore(_ context.Context, pk string, min, max Score
 	return filtered, nil
 }
 
-func (s *redimoStore) ZCount(_ context.Context, pk string, min, max ScoreBound) (int, error) {
-	asc, err := s.zAscending(pk)
+func (s *redimoStore) ZCount(ctx context.Context, pk string, min, max ScoreBound) (int, error) {
+	asc, err := s.zAscending(ctx, pk)
 	if err != nil {
 		return 0, err
 	}
@@ -175,7 +170,7 @@ func (s *redimoStore) ZCount(_ context.Context, pk string, min, max ScoreBound) 
 	return count, nil
 }
 
-func (s *redimoStore) ZRank(_ context.Context, pk, member string, rev bool) (int, bool, error) {
+func (s *redimoStore) ZRank(ctx context.Context, pk, member string, rev bool) (int, bool, error) {
 	// Delegate to the fork's bounded ZRANK/ZREVRANK: it counts the "before" side by
 	// score with a score-index Query and resolves the lexical tie-break within ONLY
 	// the equal-score group — not by reading and re-sorting the whole set here. The
@@ -187,10 +182,11 @@ func (s *redimoStore) ZRank(_ context.Context, pk, member string, rev bool) (int
 		found bool
 		err   error
 	)
+	cl := s.client.WithContext(ctx)
 	if rev {
-		rank, found, err = s.client.ZREVRANK(pk, member)
+		rank, found, err = cl.ZREVRANK(pk, member)
 	} else {
-		rank, found, err = s.client.ZRANK(pk, member)
+		rank, found, err = cl.ZRANK(pk, member)
 	}
 	if err != nil {
 		return 0, false, err
@@ -205,7 +201,7 @@ func (s *redimoStore) ZRemRangeByRank(ctx context.Context, pk string, start, sto
 		return 0, err
 	}
 
-	return s.zRemMembers(pk, victims)
+	return s.zRemMembers(ctx, pk, victims)
 }
 
 func (s *redimoStore) ZRemRangeByScore(ctx context.Context, pk string, min, max ScoreBound) (int, error) {
@@ -214,12 +210,12 @@ func (s *redimoStore) ZRemRangeByScore(ctx context.Context, pk string, min, max 
 		return 0, err
 	}
 
-	return s.zRemMembers(pk, victims)
+	return s.zRemMembers(ctx, pk, victims)
 }
 
 // zRemMembers removes the given members from pk and returns how many were removed,
 // the shared tail of ZREMRANGEBYRANK / ZREMRANGEBYSCORE.
-func (s *redimoStore) zRemMembers(pk string, victims []ZMember) (int, error) {
+func (s *redimoStore) zRemMembers(ctx context.Context, pk string, victims []ZMember) (int, error) {
 	if len(victims) == 0 {
 		return 0, nil
 	}
@@ -229,7 +225,7 @@ func (s *redimoStore) zRemMembers(pk string, victims []ZMember) (int, error) {
 		names[i] = m.Member
 	}
 
-	removed, err := s.client.ZREM(pk, names...)
+	removed, err := s.client.WithContext(ctx).ZREM(pk, names...)
 	if err != nil {
 		return 0, err
 	}
