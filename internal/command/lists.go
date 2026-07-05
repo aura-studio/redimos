@@ -72,18 +72,7 @@ func (r *Router) registerLists() {
 // reports live=false, wrongType=false — a List read then behaves as if the key
 // were an empty list.
 func (r *Router) listState(ctx context.Context, pk string) (m meta.Meta, live, wrongType bool, err error) {
-	m, found, err := r.Storage.Meta.Load(ctx, pk)
-	if err != nil {
-		return meta.Meta{}, false, false, err
-	}
-	if !found || meta.IsExpired(m, r.now()) {
-		return meta.Meta{}, false, false, nil
-	}
-	if m.Type != meta.TypeList {
-		return m, false, true, nil
-	}
-
-	return m, true, false, nil
+	return r.loadMetaState(ctx, pk, meta.TypeList)
 }
 
 // pushCommon is the shared tail of LPUSH/RPUSH/LPUSHX/RPUSHX once the key is known

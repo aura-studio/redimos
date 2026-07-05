@@ -80,18 +80,7 @@ func (r *Router) registerSets() {
 // live=false, wrongType=false — a Set read then behaves as if the key were an
 // empty set.
 func (r *Router) setState(ctx context.Context, pk string) (m meta.Meta, live, wrongType bool, err error) {
-	m, found, err := r.Storage.Meta.Load(ctx, pk)
-	if err != nil {
-		return meta.Meta{}, false, false, err
-	}
-	if !found || meta.IsExpired(m, r.now()) {
-		return meta.Meta{}, false, false, nil
-	}
-	if m.Type != meta.TypeSet {
-		return m, false, true, nil
-	}
-
-	return m, true, false, nil
+	return r.loadMetaState(ctx, pk, meta.TypeSet)
 }
 
 // ensureSetWritable runs the collection write-path preamble shared by the Set
@@ -560,13 +549,7 @@ func (r *Router) handleSScan(ctx context.Context, c *server.Conn, args [][]byte)
 // members slice is normalized to a non-nil empty slice so the inner array always
 // encodes as "*0" (empty array), never the null array "*-1", matching Redis/Pika.
 func writeSScanReply(c *server.Conn, cursor string, members [][]byte) {
-	if members == nil {
-		members = [][]byte{}
-	}
-	buf := resp.AppendArrayHeader(nil, 2)
-	buf = resp.AppendBulkString(buf, []byte(cursor))
-	buf = resp.AppendBulkArray(buf, members)
-	c.Redcon().WriteRaw(buf)
+	writeScanReply(c, cursor, members)
 }
 
 // setOp selects which set-algebra operation computeSetAlgebra performs.

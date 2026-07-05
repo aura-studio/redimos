@@ -11,7 +11,7 @@
 #
 # Build context is the redimos repository root; the redimo/v2 dependency resolves
 # from the Go module proxy at the version pinned in go.mod (github.com/aura-studio/
-# redimo/v2, currently v2.8.0):
+# redimo/v2, currently v2.8.1):
 #
 #     docker build -t redimos:latest .
 # =============================================================================

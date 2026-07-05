@@ -18,11 +18,11 @@ on:
   workflow_dispatch:
 
 env:
-  # redimo fork pinned reference (LOCKED commit = tag v2.8.0 on the v2.0 branch).
+  # redimo fork pinned reference (LOCKED commit = tag v2.8.1 on the v2.0 branch).
   # Update this together with the redimo version required in the redimos go.mod
   # whenever the fork is intentionally bumped.
   REDIMO_REPO: aura-studio/redimo
-  REDIMO_REF: 0f1698620a36f6fd87a53d4ae2a1cb7856a64c01
+  REDIMO_REF: f0b13f078686abab715cbdf2d93d1ee092254df1
   # Use exactly the installed toolchain (matches go.mod's `go 1.25`); never let
   # GOTOOLCHAIN=auto silently download a different, unpinned toolchain.
   GOTOOLCHAIN: local

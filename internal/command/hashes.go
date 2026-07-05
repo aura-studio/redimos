@@ -74,18 +74,7 @@ func (r *Router) registerHashes() {
 // reports live=false, wrongType=false — a Hash read then behaves as if the key
 // were an empty hash.
 func (r *Router) hashState(ctx context.Context, pk string) (m meta.Meta, live, wrongType bool, err error) {
-	m, found, err := r.Storage.Meta.Load(ctx, pk)
-	if err != nil {
-		return meta.Meta{}, false, false, err
-	}
-	if !found || meta.IsExpired(m, r.now()) {
-		return meta.Meta{}, false, false, nil
-	}
-	if m.Type != meta.TypeHash {
-		return m, false, true, nil
-	}
-
-	return m, true, false, nil
+	return r.loadMetaState(ctx, pk, meta.TypeHash)
 }
 
 // ensureHashWritable runs the collection write-path preamble shared by every Hash
@@ -746,11 +735,5 @@ func (r *Router) handleHScan(ctx context.Context, c *server.Conn, args [][]byte)
 // pairs slice is normalized to a non-nil empty slice so the inner array always
 // encodes as "*0" (empty array), never the null array "*-1", matching Redis/Pika.
 func writeHScanReply(c *server.Conn, cursor string, pairs [][]byte) {
-	if pairs == nil {
-		pairs = [][]byte{}
-	}
-	buf := resp.AppendArrayHeader(nil, 2)
-	buf = resp.AppendBulkString(buf, []byte(cursor))
-	buf = resp.AppendBulkArray(buf, pairs)
-	c.Redcon().WriteRaw(buf)
+	writeScanReply(c, cursor, pairs)
 }

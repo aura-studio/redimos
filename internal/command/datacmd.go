@@ -194,3 +194,17 @@ func (r *Router) adjustCount(ctx context.Context, pk string, typ meta.KeyType, d
 
 	return nil
 }
+
+// writeScanReply writes the two-element single-pk SCAN reply [cursor, [items...]]
+// shared by SSCAN and HSCAN. A nil items slice is normalized to a non-nil empty
+// slice so the inner array always encodes as "*0" (empty array), never the null
+// array "*-1", matching Redis/Pika.
+func writeScanReply(c *server.Conn, cursor string, items [][]byte) {
+	if items == nil {
+		items = [][]byte{}
+	}
+	buf := resp.AppendArrayHeader(nil, 2)
+	buf = resp.AppendBulkString(buf, []byte(cursor))
+	buf = resp.AppendBulkArray(buf, items)
+	c.Redcon().WriteRaw(buf)
+}
