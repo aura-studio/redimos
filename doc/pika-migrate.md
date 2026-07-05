@@ -34,6 +34,8 @@
 
 ## 2. 操作步骤（含实测踩坑）
 
+> **开箱即用**：本仓库 [`deploy/pika-migrate/`](../deploy/pika-migrate/) 已把下面这套构建 + 修复 + 配置固化成一个 `Dockerfile` + `entrypoint.sh`（用环境变量配目标),实测容器化跑通同一套 523 键迁移(0 不一致)。想手工理解或定制看下面步骤；想直接用看该目录 README。
+
 前置：源 Pika v3.2.2（镜像 `pikadb/pika:v3.2.2`，注意该镜像无 ENTRYPOINT，须显式 `pika -c /pika/conf/pika.conf`，端口 9221）、redimos 目标已起（默认 DB0 即可，无需 `-multi-db`）。
 
 1. **构建 pika-migrate**（C++，gcc 4.8 系；无预编译包）：
