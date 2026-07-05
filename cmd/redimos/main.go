@@ -235,15 +235,12 @@ func run(cfg appConfig) error {
 	// uses, so DEL/expiry hand the pk to the background reclaimer off the
 	// request path. The sweeper is the weekly backstop for pks the deleter
 	// dropped or failed to reclaim.
+	// The deleter reclaims members via store.DeleteMembersIfDead, which deletes a DEL'd
+	// key's members atomically with a check that the key is still dead — so a
+	// DEL-then-recreate can never wipe the new incarnation (see meta.MemberDeleter).
 	deleter := meta.NewDeleter(store, meta.DeleterConfig{
 		RatePerSecond: cfg.deleteRate,
 		Logger:        meta.StdLogger{},
-		// Skip reclaiming a pk that was recreated after DEL enqueued it (its #meta is live
-		// again) — reclaiming would wipe the new incarnation's data (DEL-then-recreate race).
-		IsLive: func(ctx context.Context, pk string) (bool, error) {
-			_, found, err := store.LoadMeta(ctx, pk)
-			return found, err
-		},
 	})
 	metaStore := meta.NewMetaStore(store, deleter)
 	reader := meta.NewReader(metaStore, nil)

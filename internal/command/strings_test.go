@@ -158,6 +158,18 @@ func (s *fakeStringStore) DeleteMembers(_ context.Context, pk string) (int, erro
 	return n, nil
 }
 
+// DeleteMembersIfDead is the fenced reclaim used by the async lazy deleter: it reclaims a
+// key's members only while the key is dead (meta absent) and aborts, deleting nothing, when
+// the key is live again (a DEL-then-recreate). Command handler tests do not run the deleter,
+// but the fake must satisfy storage.Store.
+func (s *fakeStringStore) DeleteMembersIfDead(ctx context.Context, pk string) (int, bool, error) {
+	if s.live[pk] {
+		return 0, true, nil // live (recreated): abort, leave members intact
+	}
+	n, err := s.DeleteMembers(ctx, pk)
+	return n, false, err
+}
+
 func (s *fakeStringStore) SweepOrphans(_ context.Context) (int, error) { return 0, nil }
 
 func (s *fakeStringStore) GetString(_ context.Context, pk string) ([]byte, bool, error) {

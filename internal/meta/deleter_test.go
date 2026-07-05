@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -13,15 +12,16 @@ import (
 // asked to reclaim and (optionally) signals each call on a channel so tests can
 // wait for the background worker to consume the queue without sleeping.
 type fakeMemberDeleter struct {
-	mu    sync.Mutex
-	pks   []string
-	perPK int   // members reported deleted per call
-	err   error // when non-nil, every call fails with this error
+	mu      sync.Mutex
+	pks     []string
+	perPK   int   // members reported deleted per call
+	err     error // when non-nil, every call fails with this error
+	aborted bool  // when true, every call reports the fenced abort (key recreated)
 
-	calls chan string // buffered signal, one send per DeleteMembers call (optional)
+	calls chan string // buffered signal, one send per DeleteMembersIfDead call (optional)
 }
 
-func (f *fakeMemberDeleter) DeleteMembers(_ context.Context, pk string) (int, error) {
+func (f *fakeMemberDeleter) DeleteMembersIfDead(_ context.Context, pk string) (int, bool, error) {
 	f.mu.Lock()
 	f.pks = append(f.pks, pk)
 	f.mu.Unlock()
@@ -31,10 +31,14 @@ func (f *fakeMemberDeleter) DeleteMembers(_ context.Context, pk string) (int, er
 	}
 
 	if f.err != nil {
-		return 0, f.err
+		return 0, false, f.err
 	}
 
-	return f.perPK, nil
+	if f.aborted {
+		return 0, true, nil
+	}
+
+	return f.perPK, false, nil
 }
 
 func (f *fakeMemberDeleter) recorded() []string {
@@ -49,35 +53,31 @@ func (f *fakeMemberDeleter) recorded() []string {
 
 var _ MemberDeleter = (*fakeMemberDeleter)(nil)
 
-// TestDeleter_SkipsRecreatedKey verifies the IsLive recreate-guard: a pk that is live again
-// (recreated after being enqueued) is NOT reclaimed, so a DEL-then-recreate cannot wipe the
-// new incarnation's data; a genuine orphan (not live) is still reclaimed.
-func TestDeleter_SkipsRecreatedKey(t *testing.T) {
-	md := &fakeMemberDeleter{perPK: 1, calls: make(chan string, 4)}
-	var live atomic.Bool
-	live.Store(true) // first key looks recreated/live
+// TestDeleter_RecordsFencedAbort verifies the deleter records the atomic fence's abort: when
+// DeleteMembersIfDead reports aborted=true (the key was recreated after being enqueued, so the
+// backend transaction deleted nothing), the deleter counts it via Aborted() and reclaims no
+// members — a DEL-then-recreate cannot wipe the new incarnation's data.
+func TestDeleter_RecordsFencedAbort(t *testing.T) {
+	md := &fakeMemberDeleter{perPK: 1, aborted: true, calls: make(chan string, 4)}
 
-	d := NewDeleter(md, DeleterConfig{
-		RatePerSecond: 1000,
-		IsLive:        func(context.Context, string) (bool, error) { return live.Load(), nil },
-	})
+	d := NewDeleter(md, DeleterConfig{RatePerSecond: 1000})
 	d.Start(context.Background())
-	defer d.Stop()
 
-	// A live (recreated) key must be skipped — DeleteMembers must not fire.
-	d.Enqueue("liveKey")
-	select {
-	case pk := <-md.calls:
-		t.Fatalf("DeleteMembers called for live key %q; recreate guard failed", pk)
-	case <-time.After(250 * time.Millisecond):
-		// good: skipped
+	d.Enqueue("recreated")
+	if got := waitFor(t, md.calls); got != "recreated" {
+		t.Fatalf("processed %q, want recreated", got)
 	}
 
-	// A genuine orphan (not live) must be reclaimed.
-	live.Store(false)
-	d.Enqueue("orphan")
-	if got := waitFor(t, md.calls); got != "orphan" {
-		t.Fatalf("reclaimed %q, want orphan", got)
+	d.Stop() // wait for the worker to finish recording metrics for this pk
+
+	if got := d.Aborted(); got != 1 {
+		t.Fatalf("Aborted() = %d, want 1 (recreated key's reclaim fenced off)", got)
+	}
+	if got := d.Deleted(); got != 0 {
+		t.Fatalf("Deleted() = %d, want 0 (nothing reclaimed when the fence aborts)", got)
+	}
+	if got := d.Failures(); got != 0 {
+		t.Fatalf("Failures() = %d, want 0 (an abort is not a failure)", got)
 	}
 }
 

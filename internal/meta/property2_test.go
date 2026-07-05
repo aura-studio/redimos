@@ -64,6 +64,9 @@ func (prop2Store) SetExpire(context.Context, string, int64) (bool, error) { retu
 func (prop2Store) Persist(context.Context, string) (bool, error)          { return true, nil }
 func (prop2Store) DeleteMeta(context.Context, string) (bool, error)       { return true, nil }
 func (prop2Store) DeleteMembers(context.Context, string) (int, error)     { return 0, nil }
+func (prop2Store) DeleteMembersIfDead(context.Context, string) (int, bool, error) {
+	return 0, false, nil
+}
 func (prop2Store) SweepOrphans(context.Context) (int, error)              { return 0, nil }
 
 func (prop2Store) GetString(context.Context, string) ([]byte, bool, error) { return nil, false, nil }

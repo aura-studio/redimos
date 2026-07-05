@@ -17,7 +17,7 @@ require (
 require github.com/anishathalye/porcupine v1.3.0
 
 require (
-	github.com/aura-studio/redimo/v2 v2.6.2
+	github.com/aura-studio/redimo/v2 v2.6.4
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.26 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.30 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.30 // indirect

@@ -44,6 +44,7 @@ type lazyStore struct {
 	mu      sync.Mutex
 	metas   map[string]storage.Meta // pk -> meta item; presence == key logically exists
 	members map[string]int          // pk -> number of data members still in the backend
+	now     int64                   // clock for the fenced reclaim's expiry check (0 = keys never expire)
 
 	// memberCalls, when non-nil, receives one send per DeleteMembers call so a test
 	// can wait for the background deleter to consume the queue without sleeping.
@@ -198,6 +199,36 @@ func (s *lazyStore) DeleteMembers(_ context.Context, pk string) (int, error) {
 	}
 
 	return n, nil
+}
+
+// DeleteMembersIfDead models the fenced reclaim used by the async deleter: it reclaims a
+// key's members only while the key is dead (no meta item) and aborts, deleting nothing, when
+// the key is live again (a DEL-then-recreate). It mirrors redimo's atomic transactional
+// fence in-memory so the lazy-delete tests exercise the same seam the deleter now calls.
+func (s *lazyStore) DeleteMembersIfDead(_ context.Context, pk string) (int, bool, error) {
+	s.mu.Lock()
+	meta, present := s.metas[pk]
+	// A key is dead when its meta is absent (already DEL'd) OR expired (exp <= now); it is
+	// live only when its meta is present and unexpired — a genuine recreate, which aborts.
+	live := present && !(meta.Exp > 0 && meta.Exp <= s.now)
+	if live {
+		s.mu.Unlock()
+
+		if s.memberCalls != nil {
+			s.memberCalls <- pk
+		}
+
+		return 0, true, nil // recreated: abort, leave members intact
+	}
+	n := s.members[pk]
+	delete(s.members, pk)
+	s.mu.Unlock()
+
+	if s.memberCalls != nil {
+		s.memberCalls <- pk
+	}
+
+	return n, false, nil
 }
 
 // SweepOrphans reclaims every data member whose owning pk has no meta item.
@@ -419,6 +450,7 @@ func TestLazyDelete_DeleteMetaLifecycle(t *testing.T) {
 func TestLazyDelete_ReadPathExpiredEnqueuesAndReclaims(t *testing.T) {
 	store := newLazyStore()
 	store.memberCalls = make(chan string, 1)
+	store.now = 150 // match the reader clock so the fenced reclaim sees exp=100 as expired
 	store.seed("0:exp", TypeSet, 100, 4) // exp=100
 
 	deleter := NewDeleter(store, DeleterConfig{})

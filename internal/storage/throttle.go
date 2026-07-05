@@ -154,6 +154,11 @@ func (t *throttleStore) DeleteMembers(ctx context.Context, pk string) (int, erro
 	return deleted, t.obs(err)
 }
 
+func (t *throttleStore) DeleteMembersIfDead(ctx context.Context, pk string) (int, bool, error) {
+	deleted, aborted, err := t.inner.DeleteMembersIfDead(ctx, pk)
+	return deleted, aborted, t.obs(err)
+}
+
 func (t *throttleStore) SweepOrphans(ctx context.Context) (int, error) {
 	reclaimed, err := t.inner.SweepOrphans(ctx)
 	return reclaimed, t.obs(err)

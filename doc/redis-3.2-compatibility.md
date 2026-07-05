@@ -74,6 +74,7 @@
 | redimos **v1.28.0** | **真 AWS DynamoDB 端到端实测 + 修一个真后端才现的 bug**(见 §10.3):在 EC2 上把代理指向 us-east-1 真 DynamoDB 跑 13 维集成——Porcupine 线性化在真后端逮到 **DEL→重建惰性删除竞态**(`DEL k;SET k v;GET k` 可返回 nil),已由 **redimo v2.6.1**(`DeleteMembers` 先查 `#meta`、键被重建则跳过)修复,真 DynamoDB 上 3/3 通过。另记录第三处平台分歧:DynamoDB Number **负零归一化**(`-0`→`0`,Redis 保留 `-0`)。升 redimo v2.6.1 |
 | redimos **v1.27.0** | **补齐先前推迟的 A 组 5 项**:**#16** `Table.Register` 由 panic 改**返错**(可单测 + 聚合报告所有坏注册,`finishRegistration` 汇总失败)；**#15** 给 `args.go` 补 `ParseFloat`/`ParseFloatReply`/`WriteNotFloat` 浮点三件套(对齐已有 `ParseInt` 三件套)+ 新增索引式类型访问器 `Args`(委托规范解析器、零逻辑重复),并把散落的 `parseFloatArg`/`parseScore` 收敛到 `ParseFloat`；**#20** BITFIELD wire 测试(SET/GET/INCRBY×WRAP/SAT/FAIL×有/无符号+错误路径)；**#21** 用 **Porcupine** 做**完整线性化检查**(单键 SET/GET/DEL 480 并发操作历史,实测可线性化);redimo 侧 **#19** 补 `DeleteMembers`/`ScanMetaKeys`/`SweepOrphans` 库级测试。全单元 + 全集成(含 Porcupine)全绿 |
 | redimos **v1.29.0** | **修正 v1.28.0 的 DEL-重建修复放错层导致的回归**(见 §10.3):v1.28.0 把重建守卫塞进 **redimo `DeleteMembers`** 本身——但该原语被**同步的** `LReplaceAll`(LSET/LTRIM/LREM/LINSERT 重写活列表时先清空)复用,守卫让「清空活列表」变成 no-op,列表改写后新旧元素**拼接**(真 DynamoDB 上属性测试逮到 `LRANGE=[旧… 新…]`)。根因:重建守卫不该住在被同步/异步两条路复用的原语里。**redimo v2.6.2 把 `DeleteMembers` revert 回无条件删**;重建守卫改到 **redimos 惰性删除器**(`DeleterConfig.IsLive` 回调,仅异步惰性删除路走它,`LReplaceAll` 不经删除器故不受影响),`cmd/redimos` 用 `store.LoadMeta` 接线。新增删除器单测覆盖守卫(活键跳过/孤儿回收)。真 DynamoDB 上全 13 维 + Porcupine + 列表属性测试全绿。升 redimo v2.6.2 |
+| redimos **v1.30.0** | **DEL-重建修复终版(原子事务 fence)+ 寄存器线性化诚实化**(见 §10.3):v1.29.0 的 `IsLive` 守卫「查活」与「删成员」**非原子**,`SET` 落在两者之间仍偶发被抹(全量跑 Porcupine 在真 DynamoDB 上再逮到)。**redimo v2.6.4** 新增 `DeleteMembersIfDead`:把死活检查与成员删除放进**同一 `TransactWriteItems`**(首动作 `ConditionCheck(attribute_not_exists(#t) OR #exp <= :now)`,兼顾已 DEL 与已过期两种"死"),键被重建则事务取消、回收中止——**没有** `SET` 能挤进中间。redimos 惰性删除器改调它(`MemberDeleter`→`DeleteMembersIfDead`,新增 `Aborted()` 计数),删掉 v1.29 的 `IsLive`;`LReplaceAll` 仍走无条件 `DeleteMembers`。深挖还发现**架构性分歧**:string 分体存储(DEL 只删 meta、value 滞留)+ SET 非原子写(meta 先/value 后)+ 读路径非快照双读 ⇒ **并发 DEL 下单键寄存器不可线性化**(GET 可能新 meta 配旧滞留 value)。故测试诚实化:`TestRegisterLinearizable` 只跑 SET/GET(硬断言线性化),并发 DEL 由新增 `TestRegisterNoLostWriteAfterDelete` 断言 fence 的「不丢已确认写」。真 DynamoDB 上全绿。升 redimo v2.6.4 |
 
 ---
 
@@ -223,11 +224,16 @@ HyperLogLog 是存在 Redis String 里的 "HYLL" blob;和 BIT 一样 **纯命令
 
 除本地 DynamoDB Local 外,把代理指向 **us-east-1 真 DynamoDB**(EC2 上,`consistency=strong` 走 LSI 强一致读),对真 Redis 3.2 跑同一套 13 维集成——**真后端抓到一个本地模拟器藏住的真实 bug**:
 
-- **DEL→重建的惰性删除竞态**(Porcupine 线性化检查在真 DynamoDB 上逮到):`DEL k` 入队异步 `DeleteMembers(pk)`;紧接着 `SET k v` 重建 value 项;惰性删除器随后把它一并抹掉(`DeleteMembers` 删 pk 下所有非 `#meta` 项,含新 string value 项)→ 之后 `GET k` 对**已确认的写**返回 nil,违反线性化。**真 DynamoDB 的网络延迟给了删除器 mid-test 运行的窗口,本地模拟器太快藏住了**。修复(**两轮**):**redimo v2.6.1** 先在 `DeleteMembers` 里加「`#meta` 复现则整体跳过」的守卫——但这**放错了层**:`DeleteMembers` 也被**同步的** `LReplaceAll`(LSET/LTRIM/LREM/LINSERT 重写活列表时先清空再重推)复用,守卫让「清空活列表」变 no-op,导致列表改写后新旧元素拼接(真 DynamoDB 上列表属性测试逮到 `LRANGE=[旧… 新…]`)。**redimos v1.29.0 / redimo v2.6.2** 修正:`DeleteMembers` **revert 回无条件删**(同步/异步两条路共用的原语保持纯粹),重建守卫下移到**只在异步惰性删除路**——`DeleterConfig.IsLive` 回调(`cmd/redimos` 接 `store.LoadMeta`),删除器在回收前查 `#meta`,活键跳过;`LReplaceAll` 不经删除器,故清空活列表照常。`*STORE` 不受影响(它是 `DeleteMeta`→`DeleteMembers` 同步顺序,`#meta` 已先删)。真 DynamoDB 上 DEL-Porcupine + 列表属性 + 全 13 维全绿。残余极窄窗口需 per-incarnation epoch 才能彻底消除(已记录)。
+- **DEL→重建的惰性删除竞态 →「永久丢写」**(Porcupine 线性化检查在真 DynamoDB 上逮到):`DEL k` 入队异步 `DeleteMembers(pk)`;紧接着 `SET k v` 重建 value 项;惰性删除器随后把它一并抹掉(删 pk 下所有非 `#meta` 项,含新 string value 项)→ 之后 `GET k` 对**已确认的写永久**返回 nil。**真 DynamoDB 的网络延迟给了删除器 mid-test 运行的窗口,本地模拟器太快藏住了**。修复(**三轮**):
+  - **redimo v2.6.1**:在 `DeleteMembers` 里加「`#meta` 复现则跳过」守卫——**放错了层**,`DeleteMembers` 也被**同步的** `LReplaceAll`(LSET/LTRIM/LREM/LINSERT 重写活列表)复用,守卫让「清空活列表」变 no-op,列表改写后新旧拼接(真 DynamoDB 列表属性测试逮到 `LRANGE=[旧… 新…]`)。
+  - **redimos v1.29.0 / redimo v2.6.2**:`DeleteMembers` revert 回无条件删,重建守卫下移到只在异步路的 `DeleterConfig.IsLive` 回调(`LoadMeta`)——但 `LoadMeta` 查活与删除**非原子**,`SET` 落在两者之间仍被抹(全量跑 Porcupine 偶发)。
+  - **redimos v1.30.0 / redimo v2.6.4(终版)**:新增 `DeleteMembersIfDead`——把「查 pk 死活」与「删成员」放进**同一个 `TransactWriteItems`**,首个动作是 `ConditionCheck(attribute_not_exists(#t) OR #exp <= :now)`;键被重建(活且未过期)则整个事务取消、回收中止、新数据留存;键已 DEL(`#meta` 缺)或已过期则回收。查活与删除原子提交=**没有** `SET` 能挤进中间被抹。`LReplaceAll` 仍走无条件 `DeleteMembers`,故清空活列表照常;`*STORE` 走 `DeleteMeta`→同步 `DeleteMembers`(`#meta` 已先删)不受影响。真 DynamoDB 上「DEL 后不丢写」压测 + 列表属性 + 全 13 维全绿。
 
-> 这正是"在真测试环境更深入测试"的价值:`-0` 归一化与 DEL 重建竞态两处**都只在真 DynamoDB 上现形**,本地模拟器的时序/归一化差异把它们藏住了。
+- **单键寄存器在并发 DEL 下不可线性化(架构性,已归类为既有原子性分歧)**:上面的 fence 消除了**永久丢写**,但**瞬时脏读**仍在,根因是 string 的**分体存储**三连击:①`DEL` 只删 `#meta`,value 项**滞留**(惰性回收);②`SET` 先写 `#meta`(EnsureType)再写 value 项(**非原子写**);③读路径把 `#meta` 与 value 项作**两次无快照**的独立读。于是一个 `GET` 可能把**新化身的 `#meta`** 与**被删化身滞留的旧 value** 配对,返回一个在其区间内从未"当前"过的值——无线性化点。彻底修需对每条 string 命令做 meta+value 的**原子读且原子写**(大改),故**刻画并记录**而非在此断言。测试相应诚实化:`TestRegisterLinearizable` 只跑 **SET/GET**(redimos 确实提供的单项强一致线性化,实测通过);并发 `DEL` 的场景由 `TestRegisterNoLostWriteAfterDelete` 断言 fence 保证的**更弱但防真丢数据**的属性(`DEL;SET;GET` 永不丢已确认写)。这与既有结论一致:**redimos 并发原子性 ≠ Redis 3.2**。
 
-`I`(全量线性化,如 Porcupine 式历史检查器)覆盖任意历史属未来工作;当前 `I` 断言的是最能抓撕裂/幻读的单键寄存器安全性。
+> 这正是"在真测试环境更深入测试"的价值:`-0` 归一化、DEL 重建**永久丢写**、以及并发 DEL 下的**寄存器不可线性化**——三处**都由真 DynamoDB / 加压历史检查逼出**,本地模拟器的时序/归一化把它们藏住了。前两者已修/已收敛,第三者刻画为架构性分歧。
+
+`I`(全量线性化)现拆为两断言:SET/GET 子集**必须**线性化(硬断言),并发 DEL 子集刻画为已记录的架构分歧;`DeleteMembersIfDead` 事务 fence 保证并发 DEL 下**不丢已确认写**。
 
 ---
 

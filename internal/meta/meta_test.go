@@ -80,6 +80,10 @@ func (f *fakeStore) DeleteMembers(_ context.Context, _ string) (int, error) {
 	return f.deleteMembersCount, f.deleteMembersErr
 }
 
+func (f *fakeStore) DeleteMembersIfDead(_ context.Context, _ string) (int, bool, error) {
+	return f.deleteMembersCount, false, f.deleteMembersErr
+}
+
 func (f *fakeStore) SweepOrphans(_ context.Context) (int, error) {
 	return f.sweepReclaimed, f.sweepErr
 }
