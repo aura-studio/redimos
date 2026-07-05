@@ -10,7 +10,7 @@
 #   * delete-queue backlog         (custom namespace, from Prometheus)
 #
 # NOTE: authoring only. Applying these (like the rest of the module) is the
-# manual, account-owner step described in RUNBOOK.md. Nothing here contacts AWS.
+# manual, account-owner step described in ../README.md. Nothing here contacts AWS.
 #
 # The two DynamoDB alarms use native AWS/DynamoDB metrics and are always
 # created. The two proxy alarms read a custom namespace that must be populated

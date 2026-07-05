@@ -99,6 +99,31 @@ func TestSweeper_SweepOnStartRunsImmediately(t *testing.T) {
 	}
 }
 
+// TestSweeper_InitialDelayRunsBeforeInterval verifies the "never sweeps on frequent
+// restart" fix: with a long Interval but a short InitialDelay, the first sweep fires
+// from the delay (well before a full interval elapses), so each process lifetime
+// sweeps at least once.
+func TestSweeper_InitialDelayRunsBeforeInterval(t *testing.T) {
+	fs := &fakeOrphanSweeper{perCall: 4, calls: make(chan struct{}, 1)}
+	// Interval an hour away; the only sweep we can observe in the test window must come
+	// from the short InitialDelay.
+	sw := NewSweeper(fs, SweeperConfig{Interval: time.Hour, InitialDelay: 20 * time.Millisecond})
+
+	sw.Start(context.Background())
+	defer sw.Stop()
+
+	waitSignal(t, fs.calls)
+
+	sw.Stop() // guarantees the worker recorded the sweep
+
+	if got := sw.Runs(); got != 1 {
+		t.Fatalf("Runs() = %d, want exactly 1 (initial-delay sweep, no tick yet)", got)
+	}
+	if got := sw.Reclaimed(); got != 4 {
+		t.Fatalf("Reclaimed() = %d, want 4", got)
+	}
+}
+
 func TestSweeper_NoSweepOnStartByDefault(t *testing.T) {
 	fs := &fakeOrphanSweeper{}
 	// Long interval and SweepOnStart off: no sweep should occur before Stop.

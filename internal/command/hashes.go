@@ -155,7 +155,10 @@ func (r *Router) handleHMSet(ctx context.Context, c *server.Conn, args [][]byte)
 	rest := args[2:]
 
 	if len(rest)%2 != 0 {
-		w.Error(resp.ErrWrongNumberOfArgs("hmset"))
+		// Redis 3.2 hmsetCommand special-cases odd argc with a literal that (a) uses
+		// uppercase HMSET and (b) omits the "'...' command" wrapper of the generic
+		// arity error — match it byte-for-byte.
+		w.Error("ERR wrong number of arguments for HMSET")
 		return
 	}
 

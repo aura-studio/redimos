@@ -748,13 +748,19 @@ func (r *Router) handleIncrByFloat(ctx context.Context, c *server.Conn, args [][
 	w.BulkString(val)
 }
 
-// parseFloatArg parses an INCRBYFLOAT increment argument with Redis' semantics (finite or
-// infinite decimals/exponents accepted, NaN rejected, whole string consumed). ok is false
-// when the argument is not a valid float. It delegates to the shared ParseFloat so the
-// "-ERR value is not a valid float" mapping is defined in exactly one place.
+// parseFloatArg parses an INCRBYFLOAT / HINCRBYFLOAT increment with Redis' semantics:
+// a FINITE decimal/exponent, whole string consumed. ok is false when the argument is
+// not a valid float. Redis rejects a non-finite increment ("inf", "1e400", ...) at
+// parse time with "value is not a valid float" (string2ld rejects inf/nan); the shared
+// ParseFloat only rejects NaN (it must still accept ±inf for ZADD scores), so also
+// reject ±Inf here so the increment path matches Redis rather than deferring to the
+// store's "increment would produce NaN or Infinity".
 func parseFloatArg(arg []byte) (float64, bool) {
 	f, err := ParseFloat(arg)
-	return f, err == nil
+	if err != nil || math.IsInf(f, 0) {
+		return 0, false
+	}
+	return f, true
 }
 
 // --- APPEND / STRLEN / SETRANGE / GETRANGE (requirements 5.10, 5.11, 16.4) ----

@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"math"
 
 	"github.com/aura-studio/redimos/v2/internal/meta"
 	"github.com/aura-studio/redimos/v2/internal/resp"
@@ -317,7 +318,25 @@ func (r *Router) applyExpire(ctx context.Context, c *server.Conn, args [][]byte,
 // expiry to now + seconds. A negative/zero seconds resolves to a past expiry and
 // deletes a live key (see applyExpire).
 func (r *Router) handleExpire(ctx context.Context, c *server.Conn, args [][]byte) {
-	r.applyExpire(ctx, c, args, func(now, seconds int64) int64 { return now + seconds })
+	r.applyExpire(ctx, c, args, func(now, seconds int64) int64 { return addExpiryClamp(now, seconds) })
+}
+
+// addExpiryClamp returns now + delta, saturating instead of wrapping on int64
+// overflow. A very large positive TTL (e.g. EXPIRE k 9223372036854775807) would
+// otherwise overflow to a negative epoch that applyExpire reads as a PAST expiry and
+// DELETES the key; clamping to math.MaxInt64 yields a far-future expiry that never
+// fires, matching Redis (which stores the far-future time and never deletes on a
+// large positive TTL). A negative overflow saturates to math.MinInt64, which still
+// resolves to a past expiry.
+func addExpiryClamp(now, delta int64) int64 {
+	s := now + delta
+	if delta > 0 && s < now {
+		return math.MaxInt64
+	}
+	if delta < 0 && s > now {
+		return math.MinInt64
+	}
+	return s
 }
 
 // handleExpireAt implements EXPIREAT key timestamp (requirement 10.4): set the
@@ -332,7 +351,7 @@ func (r *Router) handleExpireAt(ctx context.Context, c *server.Conn, args [][]by
 // has no millisecond precision). The truncation aligns to the absolute epoch so it
 // matches the SET PX / PSETEX computation.
 func (r *Router) handlePExpire(ctx context.Context, c *server.Conn, args [][]byte) {
-	r.applyExpire(ctx, c, args, func(now, ms int64) int64 { return (now*1000 + ms) / 1000 })
+	r.applyExpire(ctx, c, args, func(now, ms int64) int64 { return addExpiryClamp(now*1000, ms) / 1000 })
 }
 
 // handlePExpireAt implements PEXPIREAT key ms-timestamp (requirements 10.4, 10.5):

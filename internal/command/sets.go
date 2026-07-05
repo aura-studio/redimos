@@ -616,6 +616,15 @@ func (r *Router) computeSetAlgebra(ctx context.Context, op setOp, pks []string) 
 		if wt {
 			return nil, true, nil
 		}
+		// Redis SINTER/SINTERSTORE short-circuits in key order: the FIRST empty operand
+		// (absent, or a non-existent = empty set) makes the intersection empty and it
+		// returns WITHOUT type-checking later operands. Ending the loop here means a
+		// later wrong-type key is never loaded — e.g. `SINTER absent wrongstring` is *0,
+		// not WRONGTYPE. (Union/Diff have no such short-circuit; they type-check every
+		// operand.)
+		if op == opInter && len(members) == 0 {
+			return []string{}, false, nil
+		}
 		m := make(map[string]struct{}, len(members))
 		for _, member := range members {
 			m[member] = struct{}{}

@@ -52,6 +52,16 @@ type SweeperConfig struct {
 	// Scan on every deploy/restart.
 	SweepOnStart bool
 
+	// InitialDelay, when > 0 (and SweepOnStart is false), schedules the FIRST sweep
+	// this many seconds after Start instead of a full Interval later. It fixes the
+	// "never sweeps" hole: with only a fresh Interval ticker, a process that restarts
+	// more often than the interval (e.g. a proxy redeployed daily against a weekly
+	// sweep) resets the timer every time and the orphan sweep never fires, so orphans
+	// accumulate unbounded. A short, jittered InitialDelay guarantees each process
+	// lifetime performs a sweep soon after startup while spreading the full-table Scan
+	// across a fleet. Ignored when SweepOnStart is true (which already sweeps at t=0).
+	InitialDelay time.Duration
+
 	// OnError, if set, is called for each failed sweep. It runs on the worker
 	// goroutine, so it must not block. A failed sweep is counted and the Sweeper
 	// simply waits for the next tick to try again.
@@ -66,11 +76,12 @@ type SweeperConfig struct {
 // safe to Start once and Stop once. The zero value is not usable; construct one
 // with NewSweeper.
 type Sweeper struct {
-	sweeper  OrphanSweeper
-	interval time.Duration
-	onStart  bool
-	onError  func(err error)
-	logger   Logger
+	sweeper      OrphanSweeper
+	interval     time.Duration
+	onStart      bool
+	initialDelay time.Duration
+	onError      func(err error)
+	logger       Logger
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -92,13 +103,14 @@ func NewSweeper(s OrphanSweeper, cfg SweeperConfig) *Sweeper {
 	}
 
 	return &Sweeper{
-		sweeper:  s,
-		interval: interval,
-		onStart:  cfg.SweepOnStart,
-		onError:  cfg.OnError,
-		logger:   cfg.Logger,
-		quit:     make(chan struct{}),
-		done:     make(chan struct{}),
+		sweeper:      s,
+		interval:     interval,
+		onStart:      cfg.SweepOnStart,
+		initialDelay: cfg.InitialDelay,
+		onError:      cfg.OnError,
+		logger:       cfg.Logger,
+		quit:         make(chan struct{}),
+		done:         make(chan struct{}),
 	}
 }
 
@@ -141,6 +153,21 @@ func (s *Sweeper) run(ctx context.Context) {
 
 	if s.onStart {
 		s.sweep(ctx)
+	} else if s.initialDelay > 0 {
+		// First sweep after a short delay (then the regular ticker) so a process that
+		// restarts more often than Interval still sweeps at least once per lifetime,
+		// without the immediate-on-every-restart Scan that SweepOnStart would cause.
+		timer := time.NewTimer(s.initialDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-s.quit:
+			timer.Stop()
+			return
+		case <-timer.C:
+			s.sweep(ctx)
+		}
 	}
 
 	for {

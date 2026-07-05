@@ -74,9 +74,10 @@ type Config struct {
 	// signals that predict orphan accumulation and hot-key contention. main wires
 	// them to the deleter/sweeper accessors and the storage RMW counter. Each nil
 	// func simply omits its collector.
-	LazyDeleteDroppedFunc    func() uint64 // pks dropped because the delete queue was full
-	LazyDeleteFailuresFunc   func() uint64 // member-reclaim attempts that errored
-	LazyDeleteQueueDepthFunc func() uint64 // current lazy-delete queue length (gauge)
+	LazyDeleteDroppedFunc      func() uint64 // pks dropped because the delete queue was full
+	LazyDeleteFailuresFunc     func() uint64 // member-reclaim attempts that errored
+	LazyDeleteQueueDepthFunc   func() uint64 // current lazy-delete queue length (gauge)
+	LazyDeleteIsLiveErrorsFunc func() uint64 // recreate-guard (IsLive) checks that errored
 	OrphanSweepRunsFunc      func() uint64 // completed orphan-sweep runs
 	OrphanSweepReclaimedFunc func() uint64 // orphan members reclaimed by the sweep
 	OrphanSweepFailuresFunc  func() uint64 // orphan-sweep runs that errored
@@ -155,6 +156,7 @@ func New(cfg Config) *Metrics {
 	}{
 		{cfg.LazyDeleteDroppedFunc, "lazy_delete_dropped_total", "pks dropped because the lazy-delete queue was full."},
 		{cfg.LazyDeleteFailuresFunc, "lazy_delete_failures_total", "lazy-delete member-reclaim attempts that errored."},
+		{cfg.LazyDeleteIsLiveErrorsFunc, "lazy_delete_islive_errors_total", "lazy-delete recreate-guard (IsLive) checks that errored."},
 		{cfg.LazyDeleteQueueDepthFunc, "lazy_delete_queue_depth", "current lazy-delete queue length."},
 		{cfg.OrphanSweepRunsFunc, "orphan_sweep_runs_total", "completed orphan-sweep runs."},
 		{cfg.OrphanSweepReclaimedFunc, "orphan_sweep_reclaimed_total", "orphan members reclaimed by the weekly sweep."},

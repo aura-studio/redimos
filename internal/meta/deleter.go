@@ -94,9 +94,10 @@ type Deleter struct {
 	quit      chan struct{} // closed by Stop to request shutdown
 	done      chan struct{} // closed by the worker when it has fully exited
 
-	dropped  atomic.Int64 // enqueue attempts dropped because the queue was full
-	deleted  atomic.Int64 // total members reclaimed across all processed pks
-	failures atomic.Int64 // pks whose member deletion returned an error
+	dropped      atomic.Int64 // enqueue attempts dropped because the queue was full
+	deleted      atomic.Int64 // total members reclaimed across all processed pks
+	failures     atomic.Int64 // pks whose member deletion returned an error
+	isLiveErrors atomic.Int64 // recreate-guard (IsLive) checks that returned an error
 }
 
 // compile-time assertion that Deleter can be used as the MetaStore's enqueuer.
@@ -163,6 +164,11 @@ func (d *Deleter) Deleted() int64 { return d.deleted.Load() }
 
 // Failures returns the number of pks whose member deletion returned an error.
 func (d *Deleter) Failures() int64 { return d.failures.Load() }
+
+// IsLiveErrors returns the number of recreate-guard (IsLive) checks that returned
+// an error. A rising count means the guard is degraded — reclaims are running
+// unguarded and could race a recreate — so it is worth surfacing/alerting on.
+func (d *Deleter) IsLiveErrors() int64 { return d.isLiveErrors.Load() }
 
 // QueueLen returns the number of pks currently waiting in the queue.
 func (d *Deleter) QueueLen() int { return len(d.queue) }
@@ -236,10 +242,21 @@ func (d *Deleter) drain(ctx context.Context) {
 func (d *Deleter) process(ctx context.Context, pk string) {
 	// Recreate guard (async path only): if pk was recreated since it was enqueued (its
 	// #meta is live again), it is not an orphan — reclaiming its members would wipe the new
-	// incarnation's data. Skip. On a check error, proceed (best-effort; the weekly sweeper
-	// is the backstop).
+	// incarnation's data. Skip.
 	if d.isLive != nil {
-		if live, err := d.isLive(ctx, pk); err == nil && live {
+		live, err := d.isLive(ctx, pk)
+		switch {
+		case err != nil:
+			// The liveness check itself failed. We proceed to reclaim (best-effort; the
+			// weekly sweeper is the backstop), but this is NOT free of risk: if the pk was
+			// in fact recreated, an unguarded reclaim could wipe fresh data. Count and log
+			// it so a persistently failing check (which silently degrades the recreate
+			// guard) is visible, rather than swallowed.
+			d.isLiveErrors.Add(1)
+			if d.logger != nil {
+				d.logger.Error("lazy_delete_islive", map[string]any{"pk": pk, "error": err.Error()})
+			}
+		case live:
 			return
 		}
 	}

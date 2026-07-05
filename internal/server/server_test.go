@@ -196,3 +196,50 @@ func TestServerConnStatePersists(t *testing.T) {
 		t.Errorf("connection state did not persist across commands: authed=false on second command")
 	}
 }
+
+// TestServerDrainWaitsForInflight verifies that Drain blocks until an in-flight
+// command dispatch returns, so a graceful shutdown does not race a handler's side
+// effects (e.g. a lazy-delete enqueue) to completion.
+func TestServerDrainWaitsForInflight(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	d := DispatchFunc(func(_ context.Context, c *Conn, _ [][]byte) {
+		close(started)
+		<-release // hold the dispatch open until the test releases it
+		c.Redcon().WriteString("OK")
+	})
+
+	s := startTestServer(t, d)
+
+	conn, err := net.Dial("tcp", s.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("PING\r\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	<-started // the handler is now in flight (inflight.Add already happened)
+
+	drained := make(chan struct{})
+	go func() {
+		_ = s.Drain(2 * time.Second)
+		close(drained)
+	}()
+
+	// Drain must NOT complete while the handler is still in flight.
+	select {
+	case <-drained:
+		t.Fatal("Drain returned before the in-flight command finished")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Release the handler; Drain should now complete well within its timeout.
+	close(release)
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Drain did not return after the in-flight command finished")
+	}
+}

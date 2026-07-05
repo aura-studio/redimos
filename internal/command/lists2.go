@@ -310,11 +310,9 @@ func (r *Router) handleLInsert(ctx context.Context, c *server.Conn, args [][]byt
 		return
 	}
 
-	if err := guard.CheckWrite(key, [][]byte{value}, nil); err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
-
+	// Type-check BEFORE the value-size guard: Redis 3.2 linsertCommand replies
+	// WRONGTYPE for a non-List key with no notion of value size, so a WRONGTYPE key
+	// must win over an oversized value (the size guard would otherwise mask it).
 	_, live, wrongType, err := r.listState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
@@ -326,6 +324,11 @@ func (r *Router) handleLInsert(ctx context.Context, c *server.Conn, args [][]byt
 	}
 	if !live {
 		w.Int(0)
+		return
+	}
+
+	if err := guard.CheckWrite(key, [][]byte{value}, nil); err != nil {
+		r.writeStoreError(c, err)
 		return
 	}
 

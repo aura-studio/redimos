@@ -249,7 +249,12 @@ func run(cfg appConfig) error {
 	reader := meta.NewReader(metaStore, nil)
 	sweeper := meta.NewSweeper(store, meta.SweeperConfig{
 		Interval: cfg.sweepInterval,
-		Logger:   meta.StdLogger{},
+		// Run the first sweep a short, jittered delay after startup instead of a full
+		// interval later, so a proxy that restarts more often than the (weekly) interval
+		// still sweeps orphans each lifetime; the jitter spreads the full-table Scan
+		// across a restarting fleet. See meta.SweeperConfig.InitialDelay.
+		InitialDelay: sweepInitialDelay(cfg.sweepInterval),
+		Logger:       meta.StdLogger{},
 	})
 
 	// The command/collector metrics are built here (after the deleter and sweeper
@@ -260,9 +265,10 @@ func run(cfg appConfig) error {
 		Registry:                 registry,
 		LatencyBuckets:           metrics.DefaultLatencyBuckets,
 		InterceptionsFunc:        guard.Interceptions,
-		LazyDeleteDroppedFunc:    func() uint64 { return uint64(deleter.Dropped()) },
-		LazyDeleteFailuresFunc:   func() uint64 { return uint64(deleter.Failures()) },
-		LazyDeleteQueueDepthFunc: func() uint64 { return uint64(deleter.QueueLen()) },
+		LazyDeleteDroppedFunc:      func() uint64 { return uint64(deleter.Dropped()) },
+		LazyDeleteFailuresFunc:     func() uint64 { return uint64(deleter.Failures()) },
+		LazyDeleteQueueDepthFunc:   func() uint64 { return uint64(deleter.QueueLen()) },
+		LazyDeleteIsLiveErrorsFunc: func() uint64 { return uint64(deleter.IsLiveErrors()) },
 		OrphanSweepRunsFunc:      func() uint64 { return uint64(sweeper.Runs()) },
 		OrphanSweepReclaimedFunc: func() uint64 { return uint64(sweeper.Reclaimed()) },
 		OrphanSweepFailuresFunc:  func() uint64 { return uint64(sweeper.Failures()) },
@@ -330,17 +336,26 @@ func run(cfg appConfig) error {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w,
 			`{"ready":true,"lazy_delete_queue_depth":%d,"lazy_delete_dropped":%d,"lazy_delete_failures":%d,`+
+				`"lazy_delete_islive_errors":%d,`+
 				`"orphan_sweep_runs":%d,"orphan_sweep_failures":%d,"rmw_exhausted":%d,"large_key_interceptions":%d}`+"\n",
-			deleter.QueueLen(), deleter.Dropped(), deleter.Failures(),
+			deleter.QueueLen(), deleter.Dropped(), deleter.Failures(), deleter.IsLiveErrors(),
 			sweeper.Runs(), sweeper.Failures(), storage.RMWExhausted(), guard.Interceptions())
 	})
 	httpSrv := &http.Server{
-		Addr:              cfg.metricsAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	// Bind the metrics/health listener SYNCHRONOUSLY so a bind failure (e.g. the port
+	// is already in use) is fatal at startup and surfaced to the operator — exactly
+	// like the RESP listener below — instead of being logged from a goroutine while the
+	// proxy runs on with no /metrics, /healthz or /readyz (a silent observability loss
+	// that also hides the readiness gate from the orchestrator).
+	metricsLn, err := net.Listen("tcp", cfg.metricsAddr)
+	if err != nil {
+		return fmt.Errorf("bind metrics endpoint %s: %w", cfg.metricsAddr, err)
+	}
 	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpSrv.Serve(metricsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("redimos: metrics endpoint error: %v", err)
 		}
 	}()
@@ -383,9 +398,12 @@ func run(cfg appConfig) error {
 		}
 	}
 
-	shutdownStage("server-close", 2*time.Second, func() {
-		if err := srv.Close(); err != nil {
-			log.Printf("redimos: server close: %v", err)
+	// Drain (not Close) so in-flight command dispatches — and any lazy-delete enqueue
+	// they make — finish BEFORE the deleter is stopped; otherwise a reclaim enqueued
+	// during shutdown is lost until the next orphan sweep.
+	shutdownStage("server-drain", 3*time.Second, func() {
+		if err := srv.Drain(2 * time.Second); err != nil {
+			log.Printf("redimos: server drain: %v", err)
 		}
 	})
 	shutdownStage("sweeper-stop", 2*time.Second, sweeper.Stop)
@@ -401,6 +419,37 @@ func run(cfg appConfig) error {
 
 	log.Printf("redimos: shutdown complete in %s", time.Since(shutdownStart).Round(time.Millisecond))
 	return nil
+}
+
+// sweepInitialDelay returns a short, jittered delay for the FIRST orphan sweep after
+// startup (meta.SweeperConfig.InitialDelay). It is capped at a small fraction of the
+// interval (and 30m) and jittered so a fleet's full-table Scans spread out instead of
+// stampeding at t=0, while still guaranteeing each process lifetime sweeps soon after
+// start rather than only after a full (weekly) interval.
+func sweepInitialDelay(interval time.Duration) time.Duration {
+	maxDelay := interval / 8
+	if maxDelay > 30*time.Minute {
+		maxDelay = 30 * time.Minute
+	}
+	if maxDelay <= time.Minute {
+		// Very short interval (e.g. a test/override): sweep at ~a quarter interval.
+		if d := interval / 4; d > 0 {
+			return d
+		}
+		return interval
+	}
+
+	// Jitter uniformly in [1m, maxDelay].
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return maxDelay / 2
+	}
+	var n uint64
+	for _, x := range b {
+		n = n<<8 | uint64(x)
+	}
+	span := uint64(maxDelay - time.Minute)
+	return time.Minute + time.Duration(n%span)
 }
 
 // newInstID returns a random hex instance identifier, mirroring the server's

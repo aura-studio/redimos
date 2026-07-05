@@ -871,32 +871,23 @@ func (s *redimoStore) MGetStrings(_ context.Context, pks []string) (map[string][
 	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
 	// context.TODO() internally.
 	//
-	// The read is split into chunks of at most MaxBatchGetItems (100) partition
-	// keys so it honours the DynamoDB BatchGetItem per-call limit (design: MGET
-	// reads ≤100/batch). Within a chunk each value item is read individually via
-	// the fork's single-item GET; issuing one BatchGetItem RPC per chunk is an
-	// internal optimisation left to the fork and does not change the observable
-	// result. Duplicate pks are fetched once. Values are returned only for pks
-	// that have a value item; per-key existence/expiry and type filtering is the
-	// caller's job (the MGET handler passes only live String pks).
-	vals := make(map[string][]byte, len(pks))
+	// BatchGET issues one DynamoDB BatchGetItem per 100 partition keys (chunking and
+	// UnprocessedKeys retry are handled inside the fork), de-duplicates keys, and
+	// returns a value only for pks that have a value item — so this is a true batched
+	// read, not the former per-key GET fan-out (one RPC per key). Per-key existence /
+	// expiry / type filtering is the caller's job (the MGET handler passes only live
+	// String pks). Missing keys are simply absent from the map. It is NOT the
+	// transactional MGET (TransactGetItems): a plain multi-get needs no cross-key
+	// atomicity and BatchGetItem is cheaper and chunk-friendly.
+	rvs, err := s.client.BatchGET(pks...)
+	if err != nil {
+		return nil, err
+	}
 
-	for start := 0; start < len(pks); start += MaxBatchGetItems {
-		end := start + MaxBatchGetItems
-		if end > len(pks) {
-			end = len(pks)
-		}
-		for _, pk := range pks[start:end] {
-			if _, done := vals[pk]; done {
-				continue // duplicate key already fetched in this call
-			}
-			rv, err := s.client.GET(pk)
-			if err != nil {
-				return nil, err
-			}
-			if !rv.Empty() {
-				vals[pk] = rv.Bytes()
-			}
+	vals := make(map[string][]byte, len(rvs))
+	for pk, rv := range rvs {
+		if !rv.Empty() {
+			vals[pk] = rv.Bytes()
 		}
 	}
 
@@ -1652,7 +1643,17 @@ func (s *redimoStore) ZIncrBy(_ context.Context, pk, member string, delta float6
 
 // zAscending reads every member of the sorted set at pk in ascending score order
 // (ties by member) via the fork's ordered-read primitive, converting to the
-// storage seam's ZMember. It is the base every rank/score read here layers on.
+// storage seam's ZMember. It is the base the rank-RANGE and score reads layer on.
+//
+// Cost note: ZRangeByRank / ZRangeByScore / ZCount read the WHOLE set here on
+// purpose. A rank RANGE needs the full ordered sequence to slice with Redis' exact
+// tie order; a score RANGE / COUNT needs redimos' ScoreBound semantics — exclusive
+// "(" bounds and ±inf — which the fork's float-only, inclusive ZRANGEBYSCORE /
+// ZCOUNT cannot express without changing results. The correctness of those exact
+// semantics is worth the read; the reply memory is separately bounded by the
+// command layer's --max-collection-result cap (rangeResultCount). Reads that CAN be
+// bounded without losing semantics are: single-member ZRank/ZRevRank (fork ZRANK,
+// count-by-score + tie group) and list LRange (fork LRANGE, windowed Query).
 func (s *redimoStore) zAscending(pk string) ([]ZMember, error) {
 	ms, err := s.client.ZMembersOrdered(pk, true)
 	if err != nil {
@@ -1732,22 +1733,27 @@ func (s *redimoStore) ZCount(_ context.Context, pk string, min, max ScoreBound) 
 }
 
 func (s *redimoStore) ZRank(_ context.Context, pk, member string, rev bool) (int, bool, error) {
-	asc, err := s.zAscending(pk)
+	// Delegate to the fork's bounded ZRANK/ZREVRANK: it counts the "before" side by
+	// score with a score-index Query and resolves the lexical tie-break within ONLY
+	// the equal-score group — not by reading and re-sorting the whole set here. The
+	// fork's tie-break is byte-lexical (identical to SortZMembers), so the rank is the
+	// same as the former whole-set scan; this is a pure cost win for a single-member
+	// rank on a large key.
+	var (
+		rank  int32
+		found bool
+		err   error
+	)
+	if rev {
+		rank, found, err = s.client.ZREVRANK(pk, member)
+	} else {
+		rank, found, err = s.client.ZRANK(pk, member)
+	}
 	if err != nil {
 		return 0, false, err
 	}
 
-	for i, m := range asc {
-		if m.Member == member {
-			if rev {
-				return len(asc) - 1 - i, true, nil
-			}
-
-			return i, true, nil
-		}
-	}
-
-	return 0, false, nil
+	return int(rank), found, nil
 }
 
 func (s *redimoStore) ZRemRangeByRank(ctx context.Context, pk string, start, stop int) (int, error) {
@@ -1972,17 +1978,26 @@ func (s *redimoStore) lAll(pk string) ([][]byte, error) {
 }
 
 func (s *redimoStore) LRange(_ context.Context, pk string, start, stop int) ([][]byte, error) {
-	all, err := s.lAll(pk)
+	// Push the range to the fork's bounded LRANGE (a score-index Query limited to the
+	// requested window) instead of reading the whole list and slicing in process:
+	// LRANGE key 0 9 on a million-element list now reads ~10 elements, not a million.
+	// Lists have no tie-break subtlety (elements are ordered by their insertion-time
+	// score index, not by member bytes), so the fork's negative-index + clamp rules
+	// match Redis exactly — this is a pure cost win with identical results.
+	rvs, err := s.client.LRANGE(pk, int64(start), int64(stop))
 	if err != nil {
 		return nil, err
 	}
 
-	lo, hi, ok := ZNormalizeRankRange(len(all), start, stop)
-	if !ok {
-		return [][]byte{}, nil
+	// List elements are stored Binary but the fork re-wraps them as String-typed
+	// ReturnValues (see redimo listElement), so the raw bytes come back via String(),
+	// not Bytes() — []byte(rv.String()) is lossless. This mirrors lAll's decode.
+	out := make([][]byte, len(rvs))
+	for i, rv := range rvs {
+		out[i] = []byte(rv.String())
 	}
 
-	return append([][]byte(nil), all[lo:hi+1]...), nil
+	return out, nil
 }
 
 func (s *redimoStore) LIndex(_ context.Context, pk string, index int) ([]byte, bool, error) {

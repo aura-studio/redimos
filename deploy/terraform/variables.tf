@@ -97,7 +97,7 @@ variable "log_retention_days" {
 }
 
 # -----------------------------------------------------------------------------
-# CloudWatch alarm inputs (task 24.2). See alarms.tf and ../RUNBOOK.md.
+# CloudWatch alarm inputs (task 24.2). See alarms.tf and ../README.md.
 # -----------------------------------------------------------------------------
 
 variable "alarm_sns_topic_arns" {

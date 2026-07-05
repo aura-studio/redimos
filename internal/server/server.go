@@ -15,6 +15,8 @@ import (
 	"encoding/hex"
 	"log"
 	"net"
+	"sync"
+	"time"
 
 	"github.com/tidwall/redcon"
 )
@@ -61,6 +63,14 @@ type Server struct {
 	opts       Options
 	dispatcher Dispatcher
 	rc         *redcon.Server
+
+	// mu guards closing and serializes it against the per-command inflight.Add so a
+	// command can never register as in-flight after Drain has begun waiting (which
+	// would be a WaitGroup reuse race). It is taken read-locked on the hot command
+	// path (uncontended) and write-locked only once, by Drain.
+	mu       sync.RWMutex
+	closing  bool
+	inflight sync.WaitGroup // in-flight command dispatches, awaited by Drain
 }
 
 // New assembles a redcon server that forwards commands to d. The dispatcher
@@ -107,6 +117,20 @@ func (s *Server) onCommand(rc redcon.Conn, cmd redcon.Command) {
 		return
 	}
 
+	// Register the dispatch as in-flight so a graceful Drain waits for it — and, in
+	// particular, for any lazy-delete enqueue it performs — to finish before the
+	// caller stops the background deleter. Once Drain has flipped closing, refuse new
+	// commands: the connection is being torn down and a late command's side effects
+	// would race the drain (and could enqueue a reclaim no one is left to run).
+	s.mu.RLock()
+	if s.closing {
+		s.mu.RUnlock()
+		return
+	}
+	s.inflight.Add(1)
+	s.mu.RUnlock()
+	defer s.inflight.Done()
+
 	s.dispatcher.Dispatch(context.Background(), c, cmd.Args)
 }
 
@@ -138,9 +162,38 @@ func (s *Server) Addr() net.Addr {
 // InstID returns this instance's identifier used for SCAN cursor ownership.
 func (s *Server) InstID() string { return s.opts.InstID }
 
-// Close stops the server and closes all active connections.
+// Close stops the server and closes all active connections. It does NOT wait for
+// in-flight command dispatches; use Drain for a graceful shutdown that does.
 func (s *Server) Close() error {
 	return s.rc.Close()
+}
+
+// Drain gracefully stops the server: it flips to a closing state (refusing new
+// commands), closes the listener and all connections, then waits up to timeout for
+// the command dispatches already in flight to return. Waiting matters because a
+// dispatch may enqueue a lazy-delete reclaim as its last act; draining here, before
+// the caller stops the background deleter, keeps that reclaim from being lost (only
+// the weekly sweeper would otherwise recover it). It returns the listener Close
+// error, if any. After Drain the server permanently rejects further commands.
+func (s *Server) Drain(timeout time.Duration) error {
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+
+	err := s.rc.Close()
+
+	done := make(chan struct{})
+	go func() {
+		s.inflight.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
+
+	return err
 }
 
 // newInstID returns a random hex instance identifier. It falls back to a fixed

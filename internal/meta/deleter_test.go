@@ -95,6 +95,37 @@ func waitFor(t *testing.T, ch <-chan string) string {
 	}
 }
 
+// TestDeleter_IsLiveErrorCountedAndProceeds verifies that when the recreate-guard
+// (IsLive) check itself errors, the deleter counts it (IsLiveErrors) and still
+// reclaims the pk best-effort — the error must be surfaced, not silently swallowed.
+func TestDeleter_IsLiveErrorCountedAndProceeds(t *testing.T) {
+	md := &fakeMemberDeleter{perPK: 2, calls: make(chan string, 1)}
+	d := NewDeleter(md, DeleterConfig{
+		RatePerSecond: 1000,
+		IsLive: func(context.Context, string) (bool, error) {
+			return false, errors.New("meta load failed")
+		},
+	})
+	d.Start(context.Background())
+	defer d.Stop()
+
+	d.Enqueue("orphan")
+
+	// Despite the IsLive error, the reclaim still runs (best-effort).
+	if got := waitFor(t, md.calls); got != "orphan" {
+		t.Fatalf("reclaimed %q, want orphan", got)
+	}
+
+	d.Stop() // drain + guarantee the counters are recorded
+
+	if got := d.IsLiveErrors(); got != 1 {
+		t.Fatalf("IsLiveErrors() = %d, want 1", got)
+	}
+	if got := d.Deleted(); got != 2 {
+		t.Fatalf("Deleted() = %d, want 2 (reclaim proceeded despite the check error)", got)
+	}
+}
+
 func TestDeleter_EnqueueConsumesAndDeletesMembers(t *testing.T) {
 	md := &fakeMemberDeleter{perPK: 3, calls: make(chan string, 1)}
 	d := NewDeleter(md, DeleterConfig{})
