@@ -26,7 +26,6 @@ import (
 	"sort"
 	"strconv"
 	"sync/atomic"
-	"time"
 
 	redimo "github.com/aura-studio/redimo/v2"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -188,22 +187,12 @@ type Store interface {
 	DeleteMetaIfEmpty(ctx context.Context, pk string) (deleted bool, err error)
 
 	// DeleteMembers reclaims all of a key's data-member items — every item under
-	// the pk except the meta item (sk = "#meta"), UNCONDITIONALLY. It is used by the
-	// synchronous live-collection rewrite (LReplaceAll, backing LSET/LTRIM/LREM/LINSERT),
-	// which must clear a LIVE key before re-pushing. It returns the number of members
-	// deleted and is safe to call when the key has none (returns 0). Do NOT use it for the
-	// async lazy deleter — a DEL-then-recreate would let it wipe the new incarnation; use
-	// DeleteMembersIfDead there.
+	// the pk except the meta item (sk = "#meta"). It is the storage primitive
+	// behind the lazy deleter (task 11.1): after DeleteMeta removes the meta item,
+	// the background deleter calls DeleteMembers to Query the pk and
+	// BatchWriteItem-delete its members. It returns the number of members deleted
+	// and is safe to call when the key has none (returns 0).
 	DeleteMembers(ctx context.Context, pk string) (deleted int, err error)
-
-	// DeleteMembersIfDead reclaims a key's data-member items ONLY while the key is dead
-	// (its #meta item absent), atomically with that liveness check, and is the async lazy
-	// deleter's reclaim primitive. If the key was recreated after being enqueued (a
-	// DEL-then-recreate), the reclaim aborts (aborted=true) and the new incarnation's data
-	// is left intact — closing the linearizability window an unconditional DeleteMembers
-	// (or a non-atomic LoadMeta guard) leaves open. It returns the number of members
-	// deleted before completion or abort.
-	DeleteMembersIfDead(ctx context.Context, pk string) (deleted int, aborted bool, err error)
 
 	// SweepOrphans scans the whole table for orphan data members — items whose
 	// owning pk has no meta item (sk = "#meta") — and reclaims them. It is the
@@ -859,13 +848,6 @@ func (s *redimoStore) DeleteMembers(_ context.Context, pk string) (int, error) {
 	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
 	// context.TODO() internally.
 	return s.client.DeleteMembers(pk, s.deleteBatchSize)
-}
-
-func (s *redimoStore) DeleteMembersIfDead(_ context.Context, pk string) (int, bool, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally. nowEpoch is the wall clock: the fence reclaims a key that
-	// is dead (no #meta) OR expired (exp <= now), and aborts on a live, unexpired recreate.
-	return s.client.DeleteMembersIfDead(pk, time.Now().Unix(), s.deleteBatchSize)
 }
 
 func (s *redimoStore) SweepOrphans(_ context.Context) (int, error) {

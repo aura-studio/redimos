@@ -138,10 +138,6 @@ func (s *prop1Store) DeleteMembers(_ context.Context, _ string) (int, error) {
 	return 0, nil
 }
 
-func (s *prop1Store) DeleteMembersIfDead(_ context.Context, _ string) (int, bool, error) {
-	return 0, false, nil
-}
-
 func (s *prop1Store) SweepOrphans(_ context.Context) (int, error) {
 	return 0, nil
 }

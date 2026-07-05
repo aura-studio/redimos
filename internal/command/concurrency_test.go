@@ -106,12 +106,6 @@ func (s *syncStore) DeleteMembers(ctx context.Context, pk string) (int, error) {
 	return s.inner.DeleteMembers(ctx, pk)
 }
 
-func (s *syncStore) DeleteMembersIfDead(ctx context.Context, pk string) (int, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.inner.DeleteMembersIfDead(ctx, pk)
-}
-
 func (s *syncStore) SweepOrphans(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -32,16 +32,13 @@ import (
 //	defer d.Stop()
 
 // MemberDeleter reclaims a key's data-member items. storage.Store satisfies this
-// (via its DeleteMembersIfDead method); unit tests inject a fake so the background
+// (via its DeleteMembers method); unit tests inject a fake so the background
 // deleter can be exercised without a live DynamoDB.
 type MemberDeleter interface {
-	// DeleteMembersIfDead removes all data items under pk (everything except the meta
-	// item) ONLY while the key is dead (its #meta item absent), atomically with that
-	// liveness check. If pk was recreated after being enqueued (a DEL-then-recreate) it
-	// aborts (aborted=true) and leaves the new incarnation's data intact — the atomic
-	// fence that makes DEL-then-recreate linearizable. It returns the number deleted and
-	// must be safe to call for a pk with no members.
-	DeleteMembersIfDead(ctx context.Context, pk string) (deleted int, aborted bool, err error)
+	// DeleteMembers removes all data items under pk (everything except the meta
+	// item) and returns the number deleted. It must be safe to call for a pk with
+	// no members.
+	DeleteMembers(ctx context.Context, pk string) (deleted int, err error)
 }
 
 // DefaultQueueCapacity is the bounded queue size used when DeleterConfig leaves
@@ -68,6 +65,16 @@ type DeleterConfig struct {
 	// Logger, if set, receives structured error events (op="lazy_delete", pk, error)
 	// and takes precedence over OnError. Prefer it for machine-parseable worker logs.
 	Logger Logger
+
+	// IsLive, if set, reports whether pk currently has a live meta item. The deleter
+	// calls it before reclaiming a pk's members and SKIPS the reclaim when the key is
+	// live: a key recreated after being enqueued (a DEL-then-recreate) is not an orphan,
+	// and reclaiming it would wipe the new incarnation's data — a linearizability
+	// violation (a write acknowledged after the DEL could be silently undone). Wire it to
+	// the meta store's existence check. When nil, members are reclaimed unconditionally.
+	// This guard lives ONLY on the async lazy-delete path; the synchronous live-collection
+	// rewrite (LReplaceAll) never routes through the deleter and so is unaffected.
+	IsLive func(ctx context.Context, pk string) (bool, error)
 }
 
 // Deleter is the in-memory lazy-delete queue plus the background goroutine that
@@ -79,6 +86,7 @@ type Deleter struct {
 	rate    float64
 	onError func(pk string, err error)
 	logger  Logger
+	isLive  func(ctx context.Context, pk string) (bool, error)
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -89,7 +97,6 @@ type Deleter struct {
 	dropped  atomic.Int64 // enqueue attempts dropped because the queue was full
 	deleted  atomic.Int64 // total members reclaimed across all processed pks
 	failures atomic.Int64 // pks whose member deletion returned an error
-	aborted  atomic.Int64 // pks whose reclaim was skipped because the key was recreated (fenced)
 }
 
 // compile-time assertion that Deleter can be used as the MetaStore's enqueuer.
@@ -110,6 +117,7 @@ func NewDeleter(md MemberDeleter, cfg DeleterConfig) *Deleter {
 		rate:    cfg.RatePerSecond,
 		onError: cfg.OnError,
 		logger:  cfg.Logger,
+		isLive:  cfg.IsLive,
 		quit:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
@@ -155,10 +163,6 @@ func (d *Deleter) Deleted() int64 { return d.deleted.Load() }
 
 // Failures returns the number of pks whose member deletion returned an error.
 func (d *Deleter) Failures() int64 { return d.failures.Load() }
-
-// Aborted returns the number of pks whose reclaim was skipped by the atomic fence because
-// the key had been recreated (a DEL-then-recreate) since it was enqueued.
-func (d *Deleter) Aborted() int64 { return d.aborted.Load() }
 
 // QueueLen returns the number of pks currently waiting in the queue.
 func (d *Deleter) QueueLen() int { return len(d.queue) }
@@ -230,11 +234,17 @@ func (d *Deleter) drain(ctx context.Context) {
 // A failed deletion is counted and reported but not re-queued; the weekly sweeper
 // is the backstop for pks that fail here or are dropped by a full queue.
 func (d *Deleter) process(ctx context.Context, pk string) {
-	// Fenced reclaim (async path only): DeleteMembersIfDead deletes pk's members ATOMICALLY
-	// with a check that pk is still dead (#meta absent). If pk was recreated since it was
-	// enqueued (a DEL-then-recreate), the reclaim aborts and the new incarnation's data is
-	// left intact — no window in which a concurrent SET is silently wiped.
-	n, aborted, err := d.deleter.DeleteMembersIfDead(ctx, pk)
+	// Recreate guard (async path only): if pk was recreated since it was enqueued (its
+	// #meta is live again), it is not an orphan — reclaiming its members would wipe the new
+	// incarnation's data. Skip. On a check error, proceed (best-effort; the weekly sweeper
+	// is the backstop).
+	if d.isLive != nil {
+		if live, err := d.isLive(ctx, pk); err == nil && live {
+			return
+		}
+	}
+
+	n, err := d.deleter.DeleteMembers(ctx, pk)
 	if err != nil {
 		d.failures.Add(1)
 
@@ -245,10 +255,6 @@ func (d *Deleter) process(ctx context.Context, pk string) {
 		}
 
 		return
-	}
-
-	if aborted {
-		d.aborted.Add(1)
 	}
 
 	d.deleted.Add(int64(n))
