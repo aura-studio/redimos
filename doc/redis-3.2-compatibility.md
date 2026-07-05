@@ -76,6 +76,7 @@
 | redimos **v1.27.0** | **补齐先前推迟的 A 组 5 项**:**#16** `Table.Register` 由 panic 改**返错**(可单测 + 聚合报告所有坏注册,`finishRegistration` 汇总失败)；**#15** 给 `args.go` 补 `ParseFloat`/`ParseFloatReply`/`WriteNotFloat` 浮点三件套(对齐已有 `ParseInt` 三件套)+ 新增索引式类型访问器 `Args`(委托规范解析器、零逻辑重复),并把散落的 `parseFloatArg`/`parseScore` 收敛到 `ParseFloat`；**#20** BITFIELD wire 测试(SET/GET/INCRBY×WRAP/SAT/FAIL×有/无符号+错误路径)；**#21** 用 **Porcupine** 做**完整线性化检查**(单键 SET/GET/DEL 480 并发操作历史,实测可线性化);redimo 侧 **#19** 补 `DeleteMembers`/`ScanMetaKeys`/`SweepOrphans` 库级测试。全单元 + 全集成(含 Porcupine)全绿 |
 | redimos **v1.29.0** | **修正 v1.28.0 的 DEL-重建修复放错层导致的回归**(见 §10.3):v1.28.0 把重建守卫塞进 **redimo `DeleteMembers`** 本身——但该原语被**同步的** `LReplaceAll`(LSET/LTRIM/LREM/LINSERT 重写活列表时先清空)复用,守卫让「清空活列表」变成 no-op,列表改写后新旧元素**拼接**(真 DynamoDB 上属性测试逮到 `LRANGE=[旧… 新…]`)。根因:重建守卫不该住在被同步/异步两条路复用的原语里。**redimo v2.6.2 把 `DeleteMembers` revert 回无条件删**;重建守卫改到 **redimos 惰性删除器**(`DeleterConfig.IsLive` 回调,仅异步惰性删除路走它,`LReplaceAll` 不经删除器故不受影响),`cmd/redimos` 用 `store.LoadMeta` 接线。新增删除器单测覆盖守卫(活键跳过/孤儿回收)。真 DynamoDB 上全 13 维 + Porcupine + 列表属性测试全绿。升 redimo v2.6.2 |
 | redimos **v1.31.0** | **事务 fence 实测被否、revert 回非事务 `IsLive`;寄存器线性化诚实化**(见 §10.3):v1.29.0 的 `IsLive` 守卫非原子仍偶发丢写,遂在 v1.30.0 试过 `redimo v2.6.4 DeleteMembersIfDead`(把死活检查+删成员放进同一 `TransactWriteItems`)。逻辑上消除丢写,但**真 DynamoDB 上引入更糟回归**:事务锁令并发/顺序 `SET` 的 `UpdateItem` 撞 `TransactionConflictException` 而失败(压测 151 次),`SET` 报错对 Redis 代理不可接受。故 **revert**:redimo 回无条件 `DeleteMembers`,异步删除器保留非事务 `IsLive` 尽力守卫(不让 `SET` 失败、比无条件删少抹,但不能消除 DEL-then-SET 丢写——彻底修需 per-incarnation epoch,超范围)。深挖确认**架构性分歧**:string 分体存储 + SET 非原子写 + 读路径非快照双读 ⇒ **并发/顺序 DEL+SET 下单键寄存器既不可线性化也不保证不丢写**,与既有「redimos 并发原子性 ≠ Redis 3.2」一致。诚实化:`TestRegisterLinearizable` 只跑 SET/GET(硬断言线性化,实测通过);DEL+SET 丢写不作断言、仅记录;`IsLive` 跳活由单测覆盖。回到 redimo v2.6.2 |
+| redimos **v1.32.0** | **一致性检测再扩 6 维(K–P)+ 修 ZADD 标志缺口**(见 §10.2):新增 K 键生命周期/空即删、L 变更返回值/幂等、M SCAN MATCH 通配语义、N 位操作对拍、O 编码阈值不变性(兼分页压测)、P 类型覆盖/建键语义,全部对真 Redis 3.2 逐字节实测通过。维度 L **逮到真兼容缺口**:`ZADD` 不支持 `NX/XX/CH/INCR`(回 `-ERR syntax error`);已在 `handleZAdd` 实现四标志(NX/XX 门控、CH 计变更、INCR 返新分值/门控 nil、错误串对齐、重复成员按 Redis 顺序逐对计数),无标志走原快路径,`zadd_flags_test.go` 锁定。全集成 + 全单元全绿,无生产码回归 |
 
 ---
 
@@ -215,6 +216,19 @@ HyperLogLog 是存在 Redis String 里的 "HYLL" blob;和 BIT 一样 **纯命令
 | **H 多 DB 隔离** | `multidb_test.go` | SELECT n 后键跨库不可见(pk 前缀隔离)对拍 | ✅ 逐字节一致(需 `-multi-db`) |
 | **I 单键寄存器安全** | `linearizability_test.go` | 16×40 并发 SET/GET,每次 GET 必为某次真实写入值(无撕裂/幻读);可线性化子集 | ✅ 无违例(多项写非原子仍属已知、不在此检) |
 | **J 命令覆盖扫射** | `coverage_sweep_test.go` | 二线命令(SETEX/GETSET/MSET/MSETNX/HMSET/HSETNX/HINCRBY/LINSERT/L{PUSH,POP}X/LTRIM/SMOVE/S*STORE/ZINCRBY/ZRANK/ZREVRANGE/ZREMRANGEBY*/EXISTS 多键/DEL 多键…)57 例广度对拍 | ✅ 一致 |
+
+**再扩 6 个新维度(K–P,`test/integration/`,同一 `differ` 双端框架,全部对真 Redis 3.2 实测)**:
+
+| 维度 | 文件 | 检测内容 | 结果 |
+|---|---|---|---|
+| **K 键生命周期/空即删** | `lifecycle_test.go` | 经 SREM/HDEL/ZREM/LPOP/RPOP/LREM/SPOP/LTRIM/ZREMRANGEBY{RANK,SCORE,LEX} 删到空后,`EXISTS=0`/`TYPE=none`/`TTL=-2`,且重建不带旧 TTL | ✅ 逐字节一致 |
+| **L 变更返回值/幂等语义** | `mutation_return_test.go` | SADD 返「新增数非总数」、ZADD 新增 vs 更新、HSET 1新/0更、SMOVE/SETNX/PERSIST/EXPIRE 1/0、EXISTS 多键计数、L{INSERT,PUSHX} 缺键 | ✅ 一致(**逮到 ZADD 缺 NX/XX/CH/INCR,已修**) |
+| **M SCAN MATCH 通配语义** | `scan_match_test.go` | `*`/`?`/`[abc]`/`[a-c]`/`[^a]` 否定/字面/`?????` 定长 在 SSCAN/HSCAN/ZSCAN/SCAN(nonce 前缀)上的匹配集 | ✅ 一致 |
+| **N 位操作对拍** | `bitops_test.go` | SETBIT 零扩展、GETBIT 越界=0、BITCOUNT 字节范围、BITPOS 找 0/1 及全 1 串「越界返回下一位、带 end 返 -1」边角、BITOP AND/OR/XOR/NOT 不等长补零/缺键当零串 | ✅ 逐字节一致 |
+| **O 编码阈值不变性** | `encoding_invariance_test.go` | 集合跨 Redis ziplist/intset/skiplist 阈值(150 元素)行为一致;兼作 redimos **DynamoDB 分页正确性**压测 | ✅ 一致 |
+| **P 类型覆盖/建键语义** | `type_overwrite_test.go` | SET 无视旧类型覆盖为 string(旧集合被清)、各命令建键类型(HSET→hash…INCR/APPEND/SETRANGE/SETBIT→string)、GETSET 及错类型 WRONGTYPE | ✅ 逐字节一致 |
+
+> **维度 L 逮到并修复的真兼容缺口**:`ZADD` 此前把 key 之后全部实参当 score/member 对,不解析 **`NX`/`XX`/`CH`/`INCR`** 标志(Redis 3.2 特性)——`ZADD k CH 1 a` 直接回 `-ERR syntax error`。已在 `handleZAdd` 实现四标志(含 NX/XX 门控、CH 计变更数、INCR 返新分值或门控 nil、`NX XX` 冲突与 `INCR` 多对错误串对齐 3.2、重复成员按 Redis 顺序语义逐对计数),无标志走原快路径;`zadd_flags_test.go` 全维锁定,真 Redis 3.2 全绿。
 
 **三处已知、经实测刻画的分歧(非 bug,平台/设计所限,均已记录)**:
 1. **浮点累加精度**:Redis 用 C `long double`(80 位)做 INCRBYFLOAT/ZINCRBY/HINCRBYFLOAT 累加,Go 只有 `float64`(64 位),结果在第 ~17 位有效数字分叉(如 `5003.1` vs `5003.10000000000000009`)。**直接分值存取/格式化逐字节一致**,仅累加分叉;测试改用 `eqFloatClose` 数值容差断言并记录。
