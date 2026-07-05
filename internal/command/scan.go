@@ -96,7 +96,14 @@ func (r *Router) handleScan(ctx context.Context, c *server.Conn, args [][]byte) 
 		lek = l
 	}
 
-	keys, nextLEK, err := r.Storage.Store.ScanKeys(ctx, lek, limit, r.now())
+	scanCtx := ctx
+	if r.Config.ScanTimeout > 0 {
+		var cancel context.CancelFunc
+		scanCtx, cancel = context.WithTimeout(ctx, r.Config.ScanTimeout)
+		defer cancel()
+	}
+
+	keys, nextLEK, err := r.Storage.Store.ScanKeys(scanCtx, lek, limit, r.now())
 	if err != nil {
 		r.writeStoreError(c, err)
 		return

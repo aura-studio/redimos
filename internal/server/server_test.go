@@ -42,6 +42,51 @@ func startTestServer(t *testing.T, d Dispatcher) *Server {
 	return s
 }
 
+// TestServerRejectsOversizedCommand verifies the MaxCommandBytes guard: a command whose
+// raw wire size exceeds the cap gets an error reply and is never dispatched, while a small
+// command passes through normally.
+func TestServerRejectsOversizedCommand(t *testing.T) {
+	d := DispatchFunc(func(_ context.Context, c *Conn, _ [][]byte) {
+		c.Redcon().WriteString("OK") // only reached when a command IS dispatched
+	})
+
+	s := New(Options{Addr: "127.0.0.1:0", MaxCommandBytes: 40}, d)
+	signal := make(chan error, 1)
+	go func() { _ = s.ListenServeAndSignal(signal) }()
+	if err := <-signal; err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	conn, err := net.Dial("tcp", s.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	r := bufio.NewReader(conn)
+
+	// A small command dispatches normally.
+	if _, err := conn.Write([]byte("PING\r\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if line, _ := r.ReadString('\n'); strings.TrimRight(line, "\r\n") != "+OK" {
+		t.Fatalf("small-command reply = %q, want +OK", line)
+	}
+
+	// A command whose raw size exceeds the cap is rejected (error reply, not dispatched).
+	if _, err := conn.Write([]byte("ECHO " + strings.Repeat("x", 200) + "\r\n")); err != nil {
+		t.Fatalf("write big: %v", err)
+	}
+	line, err := r.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read big reply: %v", err)
+	}
+	if len(line) == 0 || line[0] != '-' {
+		t.Fatalf("oversized-command reply = %q, want an error", line)
+	}
+}
+
 // TestServerSerialPipelining verifies that pipelined commands on a single
 // connection are dispatched strictly in order and replies come back in order.
 func TestServerSerialPipelining(t *testing.T) {

@@ -56,6 +56,10 @@ type SweeperConfig struct {
 	// goroutine, so it must not block. A failed sweep is counted and the Sweeper
 	// simply waits for the next tick to try again.
 	OnError func(err error)
+
+	// Logger, if set, receives structured error events (op="orphan_sweep", error) and
+	// takes precedence over OnError. Prefer it for machine-parseable worker logs.
+	Logger Logger
 }
 
 // Sweeper periodically drives the storage orphan-sweep primitive on a ticker. It is
@@ -66,6 +70,7 @@ type Sweeper struct {
 	interval time.Duration
 	onStart  bool
 	onError  func(err error)
+	logger   Logger
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -91,6 +96,7 @@ func NewSweeper(s OrphanSweeper, cfg SweeperConfig) *Sweeper {
 		interval: interval,
 		onStart:  cfg.SweepOnStart,
 		onError:  cfg.OnError,
+		logger:   cfg.Logger,
 		quit:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
@@ -158,7 +164,9 @@ func (s *Sweeper) sweep(ctx context.Context) {
 	if err != nil {
 		s.failures.Add(1)
 
-		if s.onError != nil {
+		if s.logger != nil {
+			s.logger.Error("orphan_sweep", map[string]any{"error": err.Error()})
+		} else if s.onError != nil {
 			s.onError(err)
 		}
 

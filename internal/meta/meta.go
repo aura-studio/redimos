@@ -161,23 +161,20 @@ func (m *MetaStore) DeleteMeta(ctx context.Context, pk string) (existed bool, er
 	return existed, nil
 }
 
-// DeleteMetaIfEmpty removes the meta item ONLY IF its member count is still <= 0, then
-// enqueues the pk for asynchronous data-item reclamation (as DeleteMeta does). It is the
-// concurrency-safe deletion used when a count-adjusting write empties a collection: a
+// DeleteMetaIfEmpty removes the meta item ONLY IF its member count is still <= 0. It is
+// the concurrency-safe deletion used when a count-adjusting write empties a collection: a
 // concurrent write that raised the count makes the conditional fail, so the meta survives
 // and the freshly-added member is not stranded under a removed meta. deleted reports
 // whether a meta item was actually removed.
+//
+// Unlike DeleteMeta it does NOT enqueue the pk for asynchronous member reclamation: an
+// emptied collection has no members left (the mutation that drove the count to zero
+// already removed the last one), so there is nothing to reclaim. Crucially, enqueuing here
+// would race a recreate — if the key is re-populated before the lazy deleter runs,
+// DeleteMembers would wipe the fresh members. Any genuine orphan (a count that drifted to
+// zero with members still present) is the weekly sweeper's backstop.
 func (m *MetaStore) DeleteMetaIfEmpty(ctx context.Context, pk string) (deleted bool, err error) {
-	deleted, err = m.store.DeleteMetaIfEmpty(ctx, pk)
-	if err != nil {
-		return deleted, err
-	}
-
-	if deleted {
-		m.enqueue.Enqueue(pk)
-	}
-
-	return deleted, nil
+	return m.store.DeleteMetaIfEmpty(ctx, pk)
 }
 
 // IsExpired reports whether m is expired relative to nowEpoch (epoch seconds): a

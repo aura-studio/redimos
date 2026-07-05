@@ -2015,10 +2015,11 @@ func (s *redimoStore) LReplaceAll(ctx context.Context, pk string, elements [][]b
 	return s.RPush(ctx, pk, elements)
 }
 
-func (s *redimoStore) ScanKeys(_ context.Context, lek map[string]types.AttributeValue, limit int32, now int64) ([]string, map[string]types.AttributeValue, error) {
-	// ctx is accepted by the seam but not yet threaded down: redimo v1.7 uses
-	// context.TODO() internally.
-	return s.client.ScanMetaKeys(limit, lek, now)
+func (s *redimoStore) ScanKeys(ctx context.Context, lek map[string]types.AttributeValue, limit int32, now int64) ([]string, map[string]types.AttributeValue, error) {
+	// Thread ctx into the DynamoDB Scan so a SCAN-command deadline/cancellation
+	// (see the --scan-timeout guard in the command layer) actually aborts the
+	// backend call instead of being ignored.
+	return s.client.WithContext(ctx).ScanMetaKeys(limit, lek, now)
 }
 
 func (s *redimoStore) HScan(_ context.Context, pk string, lek map[string]types.AttributeValue, limit int32) ([]HField, map[string]types.AttributeValue, error) {

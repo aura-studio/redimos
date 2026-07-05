@@ -47,6 +47,12 @@ type Options struct {
 	// InstID identifies this proxy instance for SCAN cursor ownership. When
 	// empty a random identifier is generated so every instance is distinct.
 	InstID string
+
+	// MaxCommandBytes rejects a single command whose raw wire size exceeds it,
+	// bounding the work (and reply/allocation) one command can drive. 0 disables the
+	// check. Note: redcon buffers the command before this callback, so this caps
+	// processing rather than the transient read buffer.
+	MaxCommandBytes int
 }
 
 // Server is the redcon protocol shell. It is safe to construct with New and
@@ -93,6 +99,11 @@ func (s *Server) onCommand(rc redcon.Conn, cmd redcon.Command) {
 	if len(cmd.Args) == 0 {
 		// redcon does not deliver empty commands, but guard anyway so the
 		// dispatcher can assume args[0] exists.
+		return
+	}
+
+	if s.opts.MaxCommandBytes > 0 && len(cmd.Raw) > s.opts.MaxCommandBytes {
+		rc.WriteError("ERR command exceeds the configured maximum size")
 		return
 	}
 

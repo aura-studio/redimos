@@ -61,6 +61,10 @@ type DeleterConfig struct {
 	// on the worker goroutine, so it must not block. Failed pks are left for the
 	// weekly sweeper to reclaim.
 	OnError func(pk string, err error)
+
+	// Logger, if set, receives structured error events (op="lazy_delete", pk, error)
+	// and takes precedence over OnError. Prefer it for machine-parseable worker logs.
+	Logger Logger
 }
 
 // Deleter is the in-memory lazy-delete queue plus the background goroutine that
@@ -71,6 +75,7 @@ type Deleter struct {
 	queue   chan string
 	rate    float64
 	onError func(pk string, err error)
+	logger  Logger
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -100,6 +105,7 @@ func NewDeleter(md MemberDeleter, cfg DeleterConfig) *Deleter {
 		queue:   make(chan string, capacity),
 		rate:    cfg.RatePerSecond,
 		onError: cfg.OnError,
+		logger:  cfg.Logger,
 		quit:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
@@ -220,7 +226,9 @@ func (d *Deleter) process(ctx context.Context, pk string) {
 	if err != nil {
 		d.failures.Add(1)
 
-		if d.onError != nil {
+		if d.logger != nil {
+			d.logger.Error("lazy_delete", map[string]any{"pk": pk, "error": err.Error()})
+		} else if d.onError != nil {
 			d.onError(pk, err)
 		}
 

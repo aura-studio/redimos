@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"time"
 
 	"github.com/aura-studio/redimos/v2/internal/resp"
 	"github.com/aura-studio/redimos/v2/internal/server"
@@ -35,6 +36,11 @@ type Config struct {
 	// materialize in proxy memory before the command is rejected, bounding the heap
 	// an authenticated client can force with one command. 0 disables the cap.
 	MaxCollectionResult int
+
+	// ScanTimeout bounds how long a single SCAN page (the backend Scan) may run before
+	// the command is aborted, so a SCAN against a slow/large backend cannot hold a
+	// connection goroutine indefinitely. 0 disables the timeout.
+	ScanTimeout time.Duration
 }
 
 // Router wraps a command Table with connection-layer Config and implements
