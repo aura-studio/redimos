@@ -4,6 +4,8 @@ github.com/aura-studio/redimo/v2 v2.6.0 h1:sk9X+7JB9GnJEMJrghlVUuWjUdtZmG4Cn7l2y
 github.com/aura-studio/redimo/v2 v2.6.0/go.mod h1:DPm+LIny2W4PdcUbLP5ZpPV4l5j1z9N1ey+cvnOOG1Y=
 github.com/aura-studio/redimo/v2 v2.6.1 h1:QQH3AqiS1J/kD3hk5I9JG/dhB90b6wnWOuORFphft/c=
 github.com/aura-studio/redimo/v2 v2.6.1/go.mod h1:DPm+LIny2W4PdcUbLP5ZpPV4l5j1z9N1ey+cvnOOG1Y=
+github.com/aura-studio/redimo/v2 v2.6.2 h1:J0RVUs64kyxnKNXXrZORFwXNr2omL0w4w13ieYp5BC4=
+github.com/aura-studio/redimo/v2 v2.6.2/go.mod h1:DPm+LIny2W4PdcUbLP5ZpPV4l5j1z9N1ey+cvnOOG1Y=
 github.com/aws/aws-sdk-go-v2 v1.42.1 h1:9eOTgu1z/dVtYpNZ3/8/XbbaX0x/BqE3HUzAzs6K0ek=
 github.com/aws/aws-sdk-go-v2 v1.42.1/go.mod h1:5pKeft2eJj+gElQ38Jqg4ibCqh+/AK33/0X3hip7IjM=
 github.com/aws/aws-sdk-go-v2/config v1.32.27 h1:SJwJ9Q4kM7v5QVSYYyXj3znRr6lNyZEhSgAXmXXcVbI=

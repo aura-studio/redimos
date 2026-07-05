@@ -238,6 +238,12 @@ func run(cfg appConfig) error {
 	deleter := meta.NewDeleter(store, meta.DeleterConfig{
 		RatePerSecond: cfg.deleteRate,
 		Logger:        meta.StdLogger{},
+		// Skip reclaiming a pk that was recreated after DEL enqueued it (its #meta is live
+		// again) — reclaiming would wipe the new incarnation's data (DEL-then-recreate race).
+		IsLive: func(ctx context.Context, pk string) (bool, error) {
+			_, found, err := store.LoadMeta(ctx, pk)
+			return found, err
+		},
 	})
 	metaStore := meta.NewMetaStore(store, deleter)
 	reader := meta.NewReader(metaStore, nil)

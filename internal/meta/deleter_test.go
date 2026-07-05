@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -47,6 +48,38 @@ func (f *fakeMemberDeleter) recorded() []string {
 }
 
 var _ MemberDeleter = (*fakeMemberDeleter)(nil)
+
+// TestDeleter_SkipsRecreatedKey verifies the IsLive recreate-guard: a pk that is live again
+// (recreated after being enqueued) is NOT reclaimed, so a DEL-then-recreate cannot wipe the
+// new incarnation's data; a genuine orphan (not live) is still reclaimed.
+func TestDeleter_SkipsRecreatedKey(t *testing.T) {
+	md := &fakeMemberDeleter{perPK: 1, calls: make(chan string, 4)}
+	var live atomic.Bool
+	live.Store(true) // first key looks recreated/live
+
+	d := NewDeleter(md, DeleterConfig{
+		RatePerSecond: 1000,
+		IsLive:        func(context.Context, string) (bool, error) { return live.Load(), nil },
+	})
+	d.Start(context.Background())
+	defer d.Stop()
+
+	// A live (recreated) key must be skipped — DeleteMembers must not fire.
+	d.Enqueue("liveKey")
+	select {
+	case pk := <-md.calls:
+		t.Fatalf("DeleteMembers called for live key %q; recreate guard failed", pk)
+	case <-time.After(250 * time.Millisecond):
+		// good: skipped
+	}
+
+	// A genuine orphan (not live) must be reclaimed.
+	live.Store(false)
+	d.Enqueue("orphan")
+	if got := waitFor(t, md.calls); got != "orphan" {
+		t.Fatalf("reclaimed %q, want orphan", got)
+	}
+}
 
 // waitFor reads one value from ch or fails the test after a deadline. It keeps the
 // concurrency tests fast on success and bounded on failure.
