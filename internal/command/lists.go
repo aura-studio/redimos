@@ -273,7 +273,7 @@ func (r *Router) handleLRange(ctx context.Context, c *server.Conn, args [][]byte
 		return
 	}
 
-	_, live, wrongType, err := r.listState(ctx, pk)
+	m, live, wrongType, err := r.listState(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -284,6 +284,13 @@ func (r *Router) handleLRange(ctx context.Context, c *server.Conn, args [][]byte
 	}
 	if !live {
 		w.EmptyArray()
+		return
+	}
+
+	// Cap the reply on the elements this range actually selects (not the whole
+	// list), so LRANGE 0 -1 on an over-cap list is rejected before it is
+	// materialized in proxy memory, while a small bounded range still succeeds.
+	if r.resultCapExceeded(w, rangeResultCount(m.Count, start, stop)) {
 		return
 	}
 

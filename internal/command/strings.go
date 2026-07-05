@@ -181,19 +181,33 @@ func parseSetOptions(opts [][]byte, now int64) (setOptions, string) {
 
 // overwriteAnyType prepares a destructive String write (plain SET / SETEX /
 // PSETEX): in Redis these commands replace a key of ANY type, so a key currently
-// holding a live non-String value must be removed first — its meta is dropped and
-// its members are enqueued for reclaim, exactly like DEL — so the subsequent
-// EnsureType(String) creates a fresh string instead of failing WRONGTYPE. A
-// String, absent, or already-expired key needs no action. (This mirrors Redis'
-// type-agnostic SET; it is not used by SETNX, which never overwrites, nor by
-// GETSET, which reads the old value as a string and so keeps WRONGTYPE.)
+// holding a non-String collection must have that collection cleared first, so the
+// subsequent EnsureType(String) creates a fresh string instead of failing
+// WRONGTYPE. An absent key, or one already holding a String, needs no action — the
+// String's single value item is overwritten in place by the following SetString.
+//
+// The old collection's member items are reclaimed SYNCHRONOUSLY here (not via the
+// DEL-style async enqueue) and this applies to an EXPIRED non-String key too. The
+// async lazy-deleter guards every reclaim with an IsLive check to protect a
+// DEL-then-recreate, and SweepOrphans only reclaims members whose pk has no meta;
+// once EnsureType writes the fresh String meta, BOTH treat the stale members as
+// live, so an async or swept reclaim would never fire and the members would linger
+// forever as invisible orphans (and could even resurface if the pk later became a
+// collection again). DeleteMembers removes every non-meta item under pk while the
+// old meta still stands, before the new value is written, which is exactly the
+// window in which the removal is unambiguous. (Not used by SETNX, which claims
+// only a logically-absent key — see handleSet's NX branch — nor by GETSET, which
+// reads the old value as a string and so keeps WRONGTYPE.)
 func (r *Router) overwriteAnyType(ctx context.Context, pk string) error {
 	m, ok, err := r.Storage.Meta.Load(ctx, pk)
 	if err != nil {
 		return err
 	}
-	if !ok || meta.IsExpired(m, r.now()) || m.Type == meta.TypeString {
+	if !ok || m.Type == meta.TypeString {
 		return nil
+	}
+	if _, err := r.Storage.Store.DeleteMembers(ctx, pk); err != nil {
+		return err
 	}
 	_, err = r.Storage.Meta.DeleteMeta(ctx, pk)
 	return err
@@ -233,6 +247,18 @@ func (r *Router) handleSet(ctx context.Context, c *server.Conn, args [][]byte) {
 		}
 		if !created {
 			w.NullBulk()
+			return
+		}
+		// created==true means the key was logically absent — either truly absent or
+		// an EXPIRED key of any type (CreateTypeIfAbsent's condition claims both). If
+		// it was an expired non-String collection, its member items still sit under pk
+		// and are now hidden by the fresh String meta (see overwriteAnyType): the async
+		// deleter's IsLive guard and SweepOrphans would both consider them live, so they
+		// would leak forever. We now own the meta (no other writer can claim it), and the
+		// value item is not written yet, so DeleteMembers here reclaims exactly those
+		// stale members. The common case (a brand-new key) finds none in one Query.
+		if _, err := r.Storage.Store.DeleteMembers(ctx, pk); err != nil {
+			r.writeStoreError(c, err)
 			return
 		}
 		if err := r.Storage.Store.SetString(ctx, pk, val); err != nil {
@@ -953,11 +979,18 @@ func (r *Router) handleSetRange(ctx context.Context, c *server.Conn, args [][]by
 
 	// An empty value never creates or grows the key; it just reports the current
 	// length (Redis SETRANGE semantics). No write, so no read-modify-write is
-	// needed — a single read of the current value suffices.
+	// needed — a single read of the current value suffices. Redis still checks the
+	// type first: SETRANGE with an empty value against a live non-String key replies
+	// WRONGTYPE (setrangeCommand runs checkType before the empty-value short-circuit),
+	// so surface wrongType here rather than reporting length 0.
 	if len(val) == 0 {
-		cur, _, _, rerr := r.readCurrentString(ctx, pk)
+		cur, _, wrongType, rerr := r.readCurrentString(ctx, pk)
 		if rerr != nil {
 			r.writeStoreError(c, rerr)
+			return
+		}
+		if wrongType {
+			w.Error(resp.ErrWrongType)
 			return
 		}
 		w.Int(int64(len(cur)))

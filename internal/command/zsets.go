@@ -612,7 +612,7 @@ func (r *Router) handleZRangeByRank(ctx context.Context, c *server.Conn, args []
 		return
 	}
 
-	_, live, wrongType, serr := r.zsetState(ctx, pk)
+	m, live, wrongType, serr := r.zsetState(ctx, pk)
 	if serr != nil {
 		r.writeStoreError(c, serr)
 		return
@@ -623,6 +623,13 @@ func (r *Router) handleZRangeByRank(ctx context.Context, c *server.Conn, args []
 	}
 	if !live {
 		w.EmptyArray()
+		return
+	}
+
+	// Cap the reply on the members this rank range actually selects (not the whole
+	// set), matching LRANGE: ZRANGE/ZREVRANGE 0 -1 on an over-cap key is rejected
+	// before materializing, a small bounded range still succeeds.
+	if r.resultCapExceeded(w, rangeResultCount(m.Count, start, stop)) {
 		return
 	}
 

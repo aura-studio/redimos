@@ -124,6 +124,38 @@ func (r *Router) resultCapExceeded(w *resp.Writer, count int64) bool {
 	return false
 }
 
+// rangeResultCount returns how many elements an inclusive index range [start, stop]
+// selects from a collection of clen elements, applying Redis' negative-index and
+// clamping rules (lrangeCommand / genericZrangebyrankCommand). It is used to size
+// the reply of the index-range reads (LRANGE / ZRANGE / ZREVRANGE) for the
+// collection cap BEFORE the backend read, so a bounded sub-range of a huge key is
+// NOT over-rejected on the whole-key size — only a range that actually selects more
+// than the cap is refused. The result never exceeds clen and is 0 for an empty or
+// inverted range. It is direction-agnostic: ZREVRANGE selects the same number of
+// ranks as the forward range for the same start/stop.
+func rangeResultCount(clen, start, stop int64) int64 {
+	if clen <= 0 {
+		return 0
+	}
+	if start < 0 {
+		start += clen
+	}
+	if stop < 0 {
+		stop += clen
+	}
+	if start < 0 {
+		start = 0
+	}
+	if stop >= clen {
+		stop = clen - 1
+	}
+	if start > stop {
+		return 0
+	}
+
+	return stop - start + 1
+}
+
 // adjustCount applies a member-count delta to a collection key's meta item and,
 // when a removal drives the count to zero, removes the key entirely (an empty
 // collection does not exist in Redis, so a subsequent EXISTS/TYPE/HLEN reports it

@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"strings"
 	"time"
@@ -186,7 +187,11 @@ func (r *Router) handleAuth(_ context.Context, c *server.Conn, args [][]byte) {
 		w.Error(resp.ErrNoPasswordSet)
 		return
 	}
-	if string(args[1]) != r.Config.RequirePass {
+	// Constant-time compare so a network attacker cannot recover the password
+	// byte-by-byte from reply-timing differences. ConstantTimeCompare returns 0
+	// on a length mismatch (which itself leaks only the length), so the running
+	// time does not depend on how many leading bytes matched.
+	if subtle.ConstantTimeCompare(args[1], []byte(r.Config.RequirePass)) != 1 {
 		w.Error(resp.ErrInvalidPassword)
 		return
 	}
