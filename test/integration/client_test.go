@@ -28,24 +28,50 @@ import (
 	"time"
 )
 
-// proxyAddr returns REDIMOS_PROXY_ADDR or skips the test when it is unset.
-func proxyAddr(t *testing.T) string {
+// requireIntegrationEnv centralizes the skip-vs-fail decision for an env var that a
+// suite in this package needs. It is the single gate every proxyAddr/oracleAddr
+// lookup routes through so a misconfigured CI job can never pass green having
+// tested nothing:
+//
+//   - under `go test -short` the suite is skipped fast (no live endpoints touched);
+//   - when the named var is set, its value is returned;
+//   - when it is unset it is normally skipped, BUT if REDIMOS_REQUIRE_INTEGRATION=1
+//     it FAILS loudly (t.Fatal) — CI sets that flag so a missing proxy/oracle turns
+//     the job red instead of silently no-op'ing.
+//
+// skipMsg is the reason printed on a soft skip; failMsg is the loud message on the
+// required-but-unset failure.
+func requireIntegrationEnv(t *testing.T, name, skipMsg, failMsg string) string {
 	t.Helper()
-	addr := os.Getenv("REDIMOS_PROXY_ADDR")
+	if testing.Short() {
+		t.Skip("integration suite skipped in -short")
+	}
+	addr := os.Getenv(name)
 	if addr == "" {
-		t.Skip("REDIMOS_PROXY_ADDR not set; skipping integration test")
+		if os.Getenv("REDIMOS_REQUIRE_INTEGRATION") == "1" {
+			t.Fatal(failMsg)
+		}
+		t.Skip(skipMsg)
 	}
 	return addr
 }
 
-// oracleAddr returns REDIMOS_REDIS_ORACLE or skips (used by the differential test).
+// proxyAddr returns REDIMOS_PROXY_ADDR or skips the test when it is unset (or fails
+// loudly when REDIMOS_REQUIRE_INTEGRATION=1). Also skips under `go test -short`.
+func proxyAddr(t *testing.T) string {
+	t.Helper()
+	return requireIntegrationEnv(t, "REDIMOS_PROXY_ADDR",
+		"REDIMOS_PROXY_ADDR not set; skipping integration test",
+		"integration required but REDIMOS_PROXY_ADDR unset")
+}
+
+// oracleAddr returns REDIMOS_REDIS_ORACLE or skips (used by the differential test),
+// or fails loudly when REDIMOS_REQUIRE_INTEGRATION=1. Also skips under `go test -short`.
 func oracleAddr(t *testing.T) string {
 	t.Helper()
-	addr := os.Getenv("REDIMOS_REDIS_ORACLE")
-	if addr == "" {
-		t.Skip("REDIMOS_REDIS_ORACLE not set; skipping differential test")
-	}
-	return addr
+	return requireIntegrationEnv(t, "REDIMOS_REDIS_ORACLE",
+		"REDIMOS_REDIS_ORACLE not set; skipping differential test",
+		"integration required but REDIMOS_REDIS_ORACLE unset")
 }
 
 // respConn is a minimal binary-safe RESP2 client. Unlike a parsing client it

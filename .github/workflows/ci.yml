@@ -18,11 +18,11 @@ on:
   workflow_dispatch:
 
 env:
-  # redimo fork pinned reference (LOCKED commit = tag v2.8.1 on the v2.0 branch).
+  # redimo fork pinned reference (LOCKED commit = tag v2.8.2 on the v2.0 branch).
   # Update this together with the redimo version required in the redimos go.mod
   # whenever the fork is intentionally bumped.
   REDIMO_REPO: aura-studio/redimo
-  REDIMO_REF: f0b13f078686abab715cbdf2d93d1ee092254df1
+  REDIMO_REF: 81b3db3c66fbba821dade56bcc5b37cb5a3ce85d
   # Use exactly the installed toolchain (matches go.mod's `go 1.25`); never let
   # GOTOOLCHAIN=auto silently download a different, unpinned toolchain.
   GOTOOLCHAIN: local
@@ -164,4 +164,7 @@ jobs:
         env:
           REDIMOS_PROXY_ADDR: 127.0.0.1:6380
           REDIMOS_REDIS_ORACLE: 127.0.0.1:6379
+          # Fail (not silently skip) if the proxy/oracle endpoints are unset, so a
+          # misconfigured job can never pass green having tested nothing.
+          REDIMOS_REQUIRE_INTEGRATION: '1'
         run: go test -v -count=1 ./test/integration/
