@@ -67,6 +67,23 @@ func (r *Router) handleBitField(ctx context.Context, c *server.Conn, args [][]by
 		}
 		results = applyBitfield(cur, ops, nil)
 	} else {
+		// Reject an over-large result BEFORE bfSet grows the buffer: the largest write op's
+		// (offset+width) determines the resulting byte length. Without this, a valid-but-huge
+		// offset (up to 2^32 bits = 512MB) would allocate hundreds of MB before the write-size
+		// guard ran. Mirrors handleSetRange's CheckValueSize-before-alloc.
+		var maxBytes int64
+		for _, op := range ops {
+			if op.kind == "GET" {
+				continue
+			}
+			if nb := (op.offset + int64(op.nbits) + 7) / 8; nb > maxBytes {
+				maxBytes = nb
+			}
+		}
+		if gerr := guard.CheckValueSize(maxBytes); gerr != nil {
+			r.writeStoreError(c, gerr)
+			return
+		}
 		_, err := r.rmwString(ctx, pk, func(base []byte) ([]byte, error) {
 			next := append([]byte(nil), base...)
 			var applied []byte
@@ -189,10 +206,21 @@ func parseBitfieldOffset(tok []byte, nbits int) (int64, bool) {
 		if err != nil || idx < 0 {
 			return 0, false
 		}
-		return idx * int64(nbits), true
+		// Guard idx*nbits against int64 overflow (which produced a NEGATIVE bit offset and a
+		// negative slice index -> process panic), then bound the resulting offset like SETBIT.
+		if idx > (maxBitOffset-int64(nbits))/int64(nbits) {
+			return 0, false
+		}
+		off := idx * int64(nbits)
+		if off+int64(nbits) > maxBitOffset {
+			return 0, false
+		}
+		return off, true
 	}
 	off, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || off < 0 {
+	// Bound offset+width at maxBitOffset (2^32), matching SETBIT; an unbounded offset let bfSet
+	// grow the value to terabytes (OOM) before the write-size guard ran.
+	if err != nil || off < 0 || off+int64(nbits) > maxBitOffset {
 		return 0, false
 	}
 	return off, true

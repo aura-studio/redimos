@@ -91,6 +91,11 @@ func (r *Router) handleSetBit(ctx context.Context, c *server.Conn, args [][]byte
 	var oldBit int
 	_, err := r.rmwString(ctx, pk, func(base []byte) ([]byte, error) {
 		byteIdx := int(offset / 8)
+		// Reject before allocating: a valid offset up to 2^32 bits would otherwise make this
+		// slice grow to ~512MB before the write-size guard rejected it.
+		if gerr := guard.CheckValueSize(int64(byteIdx) + 1); gerr != nil {
+			return nil, gerr
+		}
 		next := make([]byte, len(base), maxInt(len(base), byteIdx+1))
 		copy(next, base)
 		for len(next) <= byteIdx {

@@ -67,6 +67,24 @@ func TestDiffSetBit(t *testing.T) {
 	d.eq("GETBIT 99", bs("GETBIT"), k, bs("99"))
 }
 
+// TestDiffBitfieldOffsetGuards verifies BITFIELD rejects overflowing/out-of-range bit offsets
+// with the same error as Redis 3.2 — and, crucially, no longer crashes the proxy. Before the
+// fix, a `#idx` offset overflowed int64 into a NEGATIVE slice index (process panic) and a huge
+// plain offset made the buffer grow to terabytes (OOM). Both are now bounded like SETBIT.
+func TestDiffBitfieldOffsetGuards(t *testing.T) {
+	d := newDiffer(t)
+	k := d.k("bf")
+	// #idx overflow (idx*nbits overflows int64) and a plain offset well past 2^32 both error.
+	d.eq("BITFIELD SET #idx overflow", bs("BITFIELD"), k, bs("SET"), bs("i64"), bs("#999999999999999999"), bs("1"))
+	d.eq("BITFIELD SET offset > 2^32", bs("BITFIELD"), k, bs("SET"), bs("u8"), bs("999999999999999"), bs("1"))
+	d.eq("BITFIELD GET #idx overflow", bs("BITFIELD"), k, bs("GET"), bs("u8"), bs("#999999999999999999"))
+	d.eq("BITFIELD INCRBY offset > 2^32", bs("BITFIELD"), k, bs("INCRBY"), bs("i16"), bs("999999999999999"), bs("1"))
+	// A valid small op after the rejected ones still works and matches (proxy is alive).
+	d.eq("BITFIELD SET small", bs("BITFIELD"), k, bs("SET"), bs("u8"), bs("0"), bs("255"))
+	d.eq("BITFIELD GET small", bs("BITFIELD"), k, bs("GET"), bs("u8"), bs("0"))
+	d.eq("PING after (proxy alive)", bs("PING"))
+}
+
 func TestDiffBitOp(t *testing.T) {
 	d := newDiffer(t)
 

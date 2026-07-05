@@ -1528,9 +1528,20 @@ func (s *redimoStore) SRandMember(ctx context.Context, pk string, count int) ([]
 	}
 
 	if count < 0 {
-		n := -count
-		out := make([]string, 0, n)
-		for i := 0; i < n; i++ {
+		// -count members WITH repeats. Guard the -MinInt64 overflow (which stays negative and
+		// panics make([]string,0,n)) and clamp the magnitude so a huge negative count cannot
+		// OOM or crash the process. A -count above the clamp is served as clamp members.
+		mag := int64(count)
+		if mag == math.MinInt64 {
+			mag = maxSRandRepeats
+		} else {
+			mag = -mag
+		}
+		if mag > maxSRandRepeats {
+			mag = maxSRandRepeats
+		}
+		out := make([]string, 0, mag)
+		for i := int64(0); i < mag; i++ {
 			out = append(out, members[rand.Intn(len(members))])
 		}
 
@@ -1539,6 +1550,10 @@ func (s *redimoStore) SRandMember(ctx context.Context, pk string, count int) ([]
 
 	return randomDistinct(members, count), nil
 }
+
+// maxSRandRepeats bounds SRANDMEMBER's WITH-REPEATS reply so a huge (or int64-overflowing)
+// negative count cannot allocate an unbounded slice and OOM/panic the process.
+const maxSRandRepeats = 1 << 20
 
 // randomDistinct returns up to count distinct elements chosen uniformly at random
 // from members. When count >= len(members) every member is returned (shuffled).

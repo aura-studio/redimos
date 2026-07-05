@@ -17,6 +17,17 @@ import "github.com/tidwall/redcon"
 type Conn struct {
 	rc redcon.Conn
 
+	// wrapped is the observing redcon.Conn returned by Redcon(): it flips errored
+	// when an error reply is written, so the dispatcher can label per-command
+	// metrics without the handlers reporting back. It is nil in tests that build a
+	// Conn without a real redcon connection.
+	wrapped redcon.Conn
+
+	// errored records whether the current command wrote an error reply. It is reset
+	// per command by the observing dispatcher (ResetErrored) and read after the
+	// handler returns (Errored).
+	errored bool
+
 	// authed reports whether the connection has successfully AUTHed. When
 	// requirepass is unset the connection is considered authed from the start
 	// (the handshake layer, task 6.1, decides the initial value); the shell
@@ -38,16 +49,53 @@ type Conn struct {
 // unauthenticated on db 0; the handshake layer adjusts authed based on whether
 // requirepass is configured.
 func newConn(rc redcon.Conn, instID string) *Conn {
-	return &Conn{
+	c := &Conn{
 		rc:     rc,
 		authed: false,
 		db:     0,
 		instID: instID,
 	}
+	if rc != nil {
+		c.wrapped = observingConn{Conn: rc, errored: &c.errored}
+	}
+	return c
 }
 
-// Redcon returns the underlying redcon connection used to write RESP2 replies.
-func (c *Conn) Redcon() redcon.Conn { return c.rc }
+// Redcon returns the redcon connection used to write RESP2 replies. It is the
+// observing wrapper when a real connection is present (so error replies flip the
+// per-command errored flag), or the raw connection in tests.
+func (c *Conn) Redcon() redcon.Conn {
+	if c.wrapped != nil {
+		return c.wrapped
+	}
+	return c.rc
+}
+
+// Errored reports whether the current command has written an error reply.
+func (c *Conn) Errored() bool { return c.errored }
+
+// ResetErrored clears the error flag; the dispatcher calls it before each command.
+func (c *Conn) ResetErrored() { c.errored = false }
+
+// observingConn wraps a redcon.Conn and flips *errored when an error reply is
+// written — either the raw "-...\r\n" bytes that resp.Writer flushes via WriteRaw,
+// or a direct redcon WriteError. All other methods are promoted unchanged.
+type observingConn struct {
+	redcon.Conn
+	errored *bool
+}
+
+func (o observingConn) WriteRaw(p []byte) {
+	if len(p) > 0 && p[0] == '-' {
+		*o.errored = true
+	}
+	o.Conn.WriteRaw(p)
+}
+
+func (o observingConn) WriteError(msg string) {
+	*o.errored = true
+	o.Conn.WriteError(msg)
+}
 
 // Authed reports whether the connection has authenticated.
 func (c *Conn) Authed() bool { return c.authed }

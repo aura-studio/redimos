@@ -301,7 +301,10 @@ func run(cfg appConfig) error {
 	)
 
 	// --- server: redcon RESP2 shell wired to the router --------------------
-	srv := server.New(server.Options{Addr: cfg.addr, InstID: instID, MaxCommandBytes: cfg.maxCommandBytes}, router)
+	// Wrap the router so every command feeds the Prometheus metrics + slowlog (the
+	// facilities were exposed via /metrics, INFO and SLOWLOG but never recorded).
+	dispatcher := command.NewObservedDispatcher(router, m, slowlog, cfg.slowlogThreshold)
+	srv := server.New(server.Options{Addr: cfg.addr, InstID: instID, MaxCommandBytes: cfg.maxCommandBytes}, dispatcher)
 
 	// Start the background reclaimers on a detached context so a shutdown signal
 	// does not abort in-flight deletions; they are drained by the explicit Stop
