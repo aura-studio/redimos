@@ -3,7 +3,6 @@ package command
 import (
 	"context"
 	"math"
-	"strconv"
 
 	"github.com/aura-studio/redimos/v2/internal/guard"
 	"github.com/aura-studio/redimos/v2/internal/meta"
@@ -36,27 +35,26 @@ import (
 // command name; Write marks the mutating commands for the dual-write/consistency
 // policy in later tasks.
 func (r *Router) registerStrings() {
-	t := r.Table
-	t.Register("GET", 2, false, r.handleGet)
-	t.Register("SET", -3, true, r.handleSet)
-	t.Register("SETNX", 3, true, r.handleSetNX)
-	t.Register("SETEX", 4, true, r.handleSetEX)
-	t.Register("PSETEX", 4, true, r.handlePSetEX)
-	t.Register("GETSET", 3, true, r.handleGetSet)
-	t.Register("MGET", -2, false, r.handleMGet)
-	t.Register("MSET", -3, true, r.handleMSet)
-	t.Register("MSETNX", -3, true, r.handleMSetNX)
-	t.Register("INCR", 2, true, r.handleIncr)
-	t.Register("DECR", 2, true, r.handleDecr)
-	t.Register("INCRBY", 3, true, r.handleIncrBy)
-	t.Register("DECRBY", 3, true, r.handleDecrBy)
-	t.Register("INCRBYFLOAT", 3, true, r.handleIncrByFloat)
-	t.Register("APPEND", 3, true, r.handleAppend)
-	t.Register("STRLEN", 2, false, r.handleStrlen)
-	t.Register("SETRANGE", 4, true, r.handleSetRange)
-	t.Register("GETRANGE", 4, false, r.handleGetRange)
+	r.reg("GET", 2, false, r.handleGet)
+	r.reg("SET", -3, true, r.handleSet)
+	r.reg("SETNX", 3, true, r.handleSetNX)
+	r.reg("SETEX", 4, true, r.handleSetEX)
+	r.reg("PSETEX", 4, true, r.handlePSetEX)
+	r.reg("GETSET", 3, true, r.handleGetSet)
+	r.reg("MGET", -2, false, r.handleMGet)
+	r.reg("MSET", -3, true, r.handleMSet)
+	r.reg("MSETNX", -3, true, r.handleMSetNX)
+	r.reg("INCR", 2, true, r.handleIncr)
+	r.reg("DECR", 2, true, r.handleDecr)
+	r.reg("INCRBY", 3, true, r.handleIncrBy)
+	r.reg("DECRBY", 3, true, r.handleDecrBy)
+	r.reg("INCRBYFLOAT", 3, true, r.handleIncrByFloat)
+	r.reg("APPEND", 3, true, r.handleAppend)
+	r.reg("STRLEN", 2, false, r.handleStrlen)
+	r.reg("SETRANGE", 4, true, r.handleSetRange)
+	r.reg("GETRANGE", 4, false, r.handleGetRange)
 	// SUBSTR is the deprecated Redis alias of GETRANGE with identical semantics.
-	t.Register("SUBSTR", 4, false, r.handleGetRange)
+	r.reg("SUBSTR", 4, false, r.handleGetRange)
 }
 
 // msetBatchKeys bounds how many keys MSET writes per TransactWriteItems batch
@@ -628,7 +626,7 @@ func (r *Router) handleDecr(ctx context.Context, c *server.Conn, args [][]byte) 
 // range"; otherwise the key's integer value is increased by the amount and the new
 // value replied as an integer.
 func (r *Router) handleIncrBy(ctx context.Context, c *server.Conn, args [][]byte) {
-	n, err := ParseInt(args[2])
+	n, err := Args(args).Int(2)
 	if err != nil {
 		WriteNotInteger(c)
 		return
@@ -642,7 +640,7 @@ func (r *Router) handleIncrBy(ctx context.Context, c *server.Conn, args [][]byte
 // cannot be negated without overflow and replies "-ERR decrement would overflow"
 // (matching Redis), before any value is touched.
 func (r *Router) handleDecrBy(ctx context.Context, c *server.Conn, args [][]byte) {
-	n, err := ParseInt(args[2])
+	n, err := Args(args).Int(2)
 	if err != nil {
 		WriteNotInteger(c)
 		return
@@ -724,17 +722,13 @@ func (r *Router) handleIncrByFloat(ctx context.Context, c *server.Conn, args [][
 	w.BulkString(val)
 }
 
-// parseFloatArg parses an INCRBYFLOAT increment argument with Redis' semantics:
-// finite or infinite decimals/exponents are accepted, NaN is rejected, and
-// surrounding whitespace or trailing garbage is rejected (ParseFloat requires the
-// whole string to be consumed). ok is false when the argument is not a valid
-// float, mapping to "-ERR value is not a valid float".
+// parseFloatArg parses an INCRBYFLOAT increment argument with Redis' semantics (finite or
+// infinite decimals/exponents accepted, NaN rejected, whole string consumed). ok is false
+// when the argument is not a valid float. It delegates to the shared ParseFloat so the
+// "-ERR value is not a valid float" mapping is defined in exactly one place.
 func parseFloatArg(arg []byte) (float64, bool) {
-	f, err := strconv.ParseFloat(string(arg), 64)
-	if err != nil || math.IsNaN(f) {
-		return 0, false
-	}
-	return f, true
+	f, err := ParseFloat(arg)
+	return f, err == nil
 }
 
 // --- APPEND / STRLEN / SETRANGE / GETRANGE (requirements 5.10, 5.11, 16.4) ----

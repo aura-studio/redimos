@@ -48,23 +48,22 @@ import (
 // invoked from registerDataCommands (router_storage.go). Arity counts include the
 // command name; the mutating commands are marked Write.
 func (r *Router) registerLists() {
-	t := r.Table
-	t.Register("LPUSH", -3, true, r.handleLPush)
-	t.Register("RPUSH", -3, true, r.handleRPush)
-	t.Register("LPUSHX", -3, true, r.handleLPushX)
-	t.Register("RPUSHX", -3, true, r.handleRPushX)
-	t.Register("LPOP", 2, true, r.handleLPop)
-	t.Register("RPOP", 2, true, r.handleRPop)
-	t.Register("LRANGE", 4, false, r.handleLRange)
-	t.Register("LINDEX", 3, false, r.handleLIndex)
-	t.Register("LLEN", 2, false, r.handleLLen)
+	r.reg("LPUSH", -3, true, r.handleLPush)
+	r.reg("RPUSH", -3, true, r.handleRPush)
+	r.reg("LPUSHX", -3, true, r.handleLPushX)
+	r.reg("RPUSHX", -3, true, r.handleRPushX)
+	r.reg("LPOP", 2, true, r.handleLPop)
+	r.reg("RPOP", 2, true, r.handleRPop)
+	r.reg("LRANGE", 4, false, r.handleLRange)
+	r.reg("LINDEX", 3, false, r.handleLIndex)
+	r.reg("LLEN", 2, false, r.handleLLen)
 
 	// Task 16.2: high-cost combined mutators + two-key rotation (lists2.go).
-	t.Register("LSET", 4, true, r.handleLSet)
-	t.Register("LTRIM", 4, true, r.handleLTrim)
-	t.Register("LREM", 4, true, r.handleLRem)
-	t.Register("LINSERT", 5, true, r.handleLInsert)
-	t.Register("RPOPLPUSH", 3, true, r.handleRPopLPush)
+	r.reg("LSET", 4, true, r.handleLSet)
+	r.reg("LTRIM", 4, true, r.handleLTrim)
+	r.reg("LREM", 4, true, r.handleLRem)
+	r.reg("LINSERT", 5, true, r.handleLInsert)
+	r.reg("RPOPLPUSH", 3, true, r.handleRPopLPush)
 }
 
 // listState is the outcome of loading a key's meta for a List command: whether it

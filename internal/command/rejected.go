@@ -126,32 +126,31 @@ const (
 // registerRejected registers the deliberately-declined-but-real Redis 3.2 families
 // as first-class proxy rejections. Arities are the Redis 3.2 command-table values.
 func (r *Router) registerRejected() {
-	t := r.Table
 
 	// Pub/Sub (requirement 4.1).
-	t.Register("SUBSCRIBE", -2, false, r.handlePubSubRejected)
-	t.Register("UNSUBSCRIBE", -1, false, r.handlePubSubRejected)
-	t.Register("PSUBSCRIBE", -2, false, r.handlePubSubRejected)
-	t.Register("PUNSUBSCRIBE", -1, false, r.handlePubSubRejected)
-	t.Register("PUBLISH", 3, false, r.handlePubSubRejected)
-	t.Register("PUBSUB", -2, false, r.handlePubSubRejected)
+	r.reg("SUBSCRIBE", -2, false, r.handlePubSubRejected)
+	r.reg("UNSUBSCRIBE", -1, false, r.handlePubSubRejected)
+	r.reg("PSUBSCRIBE", -2, false, r.handlePubSubRejected)
+	r.reg("PUNSUBSCRIBE", -1, false, r.handlePubSubRejected)
+	r.reg("PUBLISH", 3, false, r.handlePubSubRejected)
+	r.reg("PUBSUB", -2, false, r.handlePubSubRejected)
 
 	// Lua scripting (requirement 4.2).
-	t.Register("EVAL", -3, false, r.handleScriptRejected)
-	t.Register("EVALSHA", -3, false, r.handleScriptRejected)
-	t.Register("SCRIPT", -2, false, r.handleScriptRejected)
+	r.reg("EVAL", -3, false, r.handleScriptRejected)
+	r.reg("EVALSHA", -3, false, r.handleScriptRejected)
+	r.reg("SCRIPT", -2, false, r.handleScriptRejected)
 
 	// Transactions (requirement 4.3).
-	t.Register("MULTI", 1, false, r.handleTxnRejected)
-	t.Register("EXEC", 1, false, r.handleTxnRejected)
-	t.Register("DISCARD", 1, false, r.handleTxnRejected)
-	t.Register("WATCH", -2, false, r.handleTxnRejected)
-	t.Register("UNWATCH", 1, false, r.handleTxnRejected)
+	r.reg("MULTI", 1, false, r.handleTxnRejected)
+	r.reg("EXEC", 1, false, r.handleTxnRejected)
+	r.reg("DISCARD", 1, false, r.handleTxnRejected)
+	r.reg("WATCH", -2, false, r.handleTxnRejected)
+	r.reg("UNWATCH", 1, false, r.handleTxnRejected)
 
 	// Blocking list pops (requirement 4.4).
-	t.Register("BLPOP", -3, false, r.handleBlockingRejected)
-	t.Register("BRPOP", -3, false, r.handleBlockingRejected)
-	t.Register("BRPOPLPUSH", 4, false, r.handleBlockingRejected)
+	r.reg("BLPOP", -3, false, r.handleBlockingRejected)
+	r.reg("BRPOP", -3, false, r.handleBlockingRejected)
+	r.reg("BRPOPLPUSH", 4, false, r.handleBlockingRejected)
 
 	// Individual real-Redis-3.2 commands the proxy declines, each with its own
 	// message. Arities are the Redis 3.2 command-table values.
@@ -184,7 +183,7 @@ func (r *Router) registerRejected() {
 // command is recognised (so arity is checked and it does NOT fall through to the
 // unknown-command path) and any correctly-shaped call replies msg verbatim.
 func (r *Router) registerReject(name string, arity int, msg string) {
-	r.Table.Register(name, arity, false, func(_ context.Context, c *server.Conn, _ [][]byte) {
+	r.reg(name, arity, false, func(_ context.Context, c *server.Conn, _ [][]byte) {
 		resp.NewWriter(c.Redcon()).Error(msg)
 	})
 }

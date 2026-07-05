@@ -57,22 +57,21 @@ import (
 // invoked from registerDataCommands (router_storage.go). Arity counts include the
 // command name; the mutating commands are marked Write.
 func (r *Router) registerSets() {
-	t := r.Table
-	t.Register("SADD", -3, true, r.handleSAdd)
-	t.Register("SREM", -3, true, r.handleSRem)
-	t.Register("SISMEMBER", 3, false, r.handleSIsMember)
-	t.Register("SMEMBERS", 2, false, r.handleSMembers)
-	t.Register("SCARD", 2, false, r.handleSCard)
-	t.Register("SPOP", -2, true, r.handleSPop)
-	t.Register("SRANDMEMBER", -2, false, r.handleSRandMember)
-	t.Register("SSCAN", -3, false, r.handleSScan)
-	t.Register("SUNION", -2, false, r.handleSUnion)
-	t.Register("SINTER", -2, false, r.handleSInter)
-	t.Register("SDIFF", -2, false, r.handleSDiff)
-	t.Register("SUNIONSTORE", -3, true, r.handleSUnionStore)
-	t.Register("SINTERSTORE", -3, true, r.handleSInterStore)
-	t.Register("SDIFFSTORE", -3, true, r.handleSDiffStore)
-	t.Register("SMOVE", 4, true, r.handleSMove)
+	r.reg("SADD", -3, true, r.handleSAdd)
+	r.reg("SREM", -3, true, r.handleSRem)
+	r.reg("SISMEMBER", 3, false, r.handleSIsMember)
+	r.reg("SMEMBERS", 2, false, r.handleSMembers)
+	r.reg("SCARD", 2, false, r.handleSCard)
+	r.reg("SPOP", -2, true, r.handleSPop)
+	r.reg("SRANDMEMBER", -2, false, r.handleSRandMember)
+	r.reg("SSCAN", -3, false, r.handleSScan)
+	r.reg("SUNION", -2, false, r.handleSUnion)
+	r.reg("SINTER", -2, false, r.handleSInter)
+	r.reg("SDIFF", -2, false, r.handleSDiff)
+	r.reg("SUNIONSTORE", -3, true, r.handleSUnionStore)
+	r.reg("SINTERSTORE", -3, true, r.handleSInterStore)
+	r.reg("SDIFFSTORE", -3, true, r.handleSDiffStore)
+	r.reg("SMOVE", 4, true, r.handleSMove)
 }
 
 // setState is the outcome of loading a key's meta for a Set command: whether it is

@@ -60,31 +60,30 @@ import (
 // is invoked from registerDataCommands (router_storage.go). Arity counts include
 // the command name; the mutating commands are marked Write.
 func (r *Router) registerZSets() {
-	t := r.Table
-	t.Register("ZADD", -4, true, r.handleZAdd)
-	t.Register("ZREM", -3, true, r.handleZRem)
-	t.Register("ZSCORE", 3, false, r.handleZScore)
-	t.Register("ZINCRBY", 4, true, r.handleZIncrBy)
-	t.Register("ZCARD", 2, false, r.handleZCard)
-	t.Register("ZCOUNT", 4, false, r.handleZCount)
-	t.Register("ZRANGE", -4, false, r.handleZRange)
-	t.Register("ZREVRANGE", -4, false, r.handleZRevRange)
-	t.Register("ZRANGEBYSCORE", -4, false, r.handleZRangeByScore)
-	t.Register("ZREVRANGEBYSCORE", -4, false, r.handleZRevRangeByScore)
-	t.Register("ZRANK", 3, false, r.handleZRank)
-	t.Register("ZREVRANK", 3, false, r.handleZRevRank)
-	t.Register("ZREMRANGEBYRANK", 4, true, r.handleZRemRangeByRank)
-	t.Register("ZREMRANGEBYSCORE", 4, true, r.handleZRemRangeByScore)
+	r.reg("ZADD", -4, true, r.handleZAdd)
+	r.reg("ZREM", -3, true, r.handleZRem)
+	r.reg("ZSCORE", 3, false, r.handleZScore)
+	r.reg("ZINCRBY", 4, true, r.handleZIncrBy)
+	r.reg("ZCARD", 2, false, r.handleZCard)
+	r.reg("ZCOUNT", 4, false, r.handleZCount)
+	r.reg("ZRANGE", -4, false, r.handleZRange)
+	r.reg("ZREVRANGE", -4, false, r.handleZRevRange)
+	r.reg("ZRANGEBYSCORE", -4, false, r.handleZRangeByScore)
+	r.reg("ZREVRANGEBYSCORE", -4, false, r.handleZRevRangeByScore)
+	r.reg("ZRANK", 3, false, r.handleZRank)
+	r.reg("ZREVRANK", 3, false, r.handleZRevRank)
+	r.reg("ZREMRANGEBYRANK", 4, true, r.handleZRemRangeByRank)
+	r.reg("ZREMRANGEBYSCORE", 4, true, r.handleZRemRangeByScore)
 	// Task 15.2: single-pk scan, lexicographic range, and the in-memory store ops.
-	t.Register("ZSCAN", -3, false, r.handleZScan)
+	r.reg("ZSCAN", -3, false, r.handleZScan)
 	// ZRANGEBYLEX/ZREVRANGEBYLEX take an optional "LIMIT offset count" clause, so
 	// their arity is variadic (-4), matching Redis 3.2.
-	t.Register("ZRANGEBYLEX", -4, false, r.handleZRangeByLex)
-	t.Register("ZREVRANGEBYLEX", -4, false, r.handleZRevRangeByLex)
-	t.Register("ZLEXCOUNT", 4, false, r.handleZLexCount)
-	t.Register("ZREMRANGEBYLEX", 4, true, r.handleZRemRangeByLex)
-	t.Register("ZUNIONSTORE", -4, true, r.handleZUnionStore)
-	t.Register("ZINTERSTORE", -4, true, r.handleZInterStore)
+	r.reg("ZRANGEBYLEX", -4, false, r.handleZRangeByLex)
+	r.reg("ZREVRANGEBYLEX", -4, false, r.handleZRevRangeByLex)
+	r.reg("ZLEXCOUNT", 4, false, r.handleZLexCount)
+	r.reg("ZREMRANGEBYLEX", 4, true, r.handleZRemRangeByLex)
+	r.reg("ZUNIONSTORE", -4, true, r.handleZUnionStore)
+	r.reg("ZINTERSTORE", -4, true, r.handleZInterStore)
 }
 
 // errNotValidFloat is the Redis reply for a ZADD score / ZINCRBY increment that is
@@ -119,20 +118,16 @@ func (r *Router) zsetState(ctx context.Context, pk string) (m meta.Meta, live, w
 // accepting Redis' inf/-inf/+inf spellings and rejecting NaN. ok=false signals the
 // not-a-valid-float reply.
 func parseScore(arg []byte) (float64, bool) {
-	s := string(arg)
-	switch s {
+	switch string(arg) {
 	case "inf", "+inf", "Inf", "+Inf", "INF", "+INF":
 		return math.Inf(1), true
 	case "-inf", "-Inf", "-INF":
 		return math.Inf(-1), true
 	}
 
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsNaN(f) {
-		return 0, false
-	}
-
-	return f, true
+	// The finite case shares the canonical ParseFloat (NaN-rejecting, whole-string).
+	f, err := ParseFloat(arg)
+	return f, err == nil
 }
 
 // parseScoreBound parses a ZRANGEBYSCORE / ZCOUNT bound: a leading '(' selects the

@@ -126,6 +126,7 @@ func NewRouterWithStorage(cfg Config, st Storage) *Router {
 	r := &Router{Table: NewTable(), Config: cfg, Storage: st}
 	r.registerConnection()
 	r.registerDataCommands()
+	r.finishRegistration()
 
 	return r
 }

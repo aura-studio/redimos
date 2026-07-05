@@ -2,6 +2,8 @@ package command
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/aura-studio/redimos/v2/internal/server"
 )
@@ -62,19 +64,20 @@ func NewTable() Table {
 // spec.Name is set to that lowercase form so error text uses the lowercase name
 // (requirement 3.2) regardless of how the caller cased it.
 //
-// Register panics on a programming error (empty name, nil handler, or a
-// duplicate registration), because the table is built once at startup and such
-// mistakes should fail loudly rather than silently shadow a command.
-func (t Table) Register(name string, arity int, write bool, h Handler) {
+// Register returns an error on a programming mistake (empty name, nil handler, or a
+// duplicate registration) instead of panicking, so it is unit-testable and so the
+// initialization path can AGGREGATE every bad registration and report them together
+// (see Router.reg / finishRegistration) rather than aborting on the first.
+func (t Table) Register(name string, arity int, write bool, h Handler) error {
 	if name == "" {
-		panic("command: Register called with empty name")
+		return errors.New("command: Register called with empty name")
 	}
 	if h == nil {
-		panic("command: Register called with nil handler for " + name)
+		return fmt.Errorf("command: Register called with nil handler for %q", name)
 	}
 	lower := toLower(name)
 	if _, dup := t[lower]; dup {
-		panic("command: duplicate registration for " + lower)
+		return fmt.Errorf("command: duplicate registration for %q", lower)
 	}
 	t[lower] = CmdSpec{
 		Name:    lower,
@@ -82,6 +85,7 @@ func (t Table) Register(name string, arity int, write bool, h Handler) {
 		Handler: h,
 		Write:   write,
 	}
+	return nil
 }
 
 // Lookup returns the CmdSpec registered under name (matched case-insensitively)

@@ -71,6 +71,7 @@
 | 版本 | 变更 |
 |---|---|
 | redimos **v1.26.0** | **对齐检测从 3 维扩到 13 维**(见 §10.2):新增 A 错误/arity/WRONGTYPE、B 数值/浮点/溢出、C 回复形状、D 边界/索引、E TTL/过期、F 无序集合等价、G SCAN 不变量、H 多 DB 隔离、I 单键寄存器安全、J 命令覆盖扫射——纯新增测试(无生产码改动),全部对真 Redis 3.2 实测通过。**实测刻画并记录两处平台/设计所限的分歧**:浮点累加(long double vs float64)、TTL 亚秒精度(秒级/Pika 对齐)。集成套件共 26 个测试函数全绿 |
+| redimos **v1.27.0** | **补齐先前推迟的 A 组 5 项**:**#16** `Table.Register` 由 panic 改**返错**(可单测 + 聚合报告所有坏注册,`finishRegistration` 汇总失败)；**#15** 给 `args.go` 补 `ParseFloat`/`ParseFloatReply`/`WriteNotFloat` 浮点三件套(对齐已有 `ParseInt` 三件套)+ 新增索引式类型访问器 `Args`(委托规范解析器、零逻辑重复),并把散落的 `parseFloatArg`/`parseScore` 收敛到 `ParseFloat`；**#20** BITFIELD wire 测试(SET/GET/INCRBY×WRAP/SAT/FAIL×有/无符号+错误路径)；**#21** 用 **Porcupine** 做**完整线性化检查**(单键 SET/GET/DEL 480 并发操作历史,实测可线性化);redimo 侧 **#19** 补 `DeleteMembers`/`ScanMetaKeys`/`SweepOrphans` 库级测试。全单元 + 全集成(含 Porcupine)全绿 |
 
 ---
 

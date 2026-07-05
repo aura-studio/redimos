@@ -80,34 +80,25 @@ func TestArityOK(t *testing.T) {
 	}
 }
 
-func TestRegisterPanicsOnDuplicate(t *testing.T) {
+func TestRegisterErrorsOnDuplicate(t *testing.T) {
 	tbl := NewTable()
-	tbl.Register("ping", 1, false, noopHandler)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("expected panic on duplicate registration")
-		}
-	}()
-	tbl.Register("PING", 1, false, noopHandler)
+	if err := tbl.Register("ping", 1, false, noopHandler); err != nil {
+		t.Fatalf("first registration must succeed: %v", err)
+	}
+	if err := tbl.Register("PING", 1, false, noopHandler); err == nil {
+		t.Errorf("expected an error on duplicate registration")
+	}
 }
 
-func TestRegisterPanicsOnEmptyNameOrNilHandler(t *testing.T) {
+func TestRegisterErrorsOnEmptyNameOrNilHandler(t *testing.T) {
 	t.Run("empty name", func(t *testing.T) {
-		tbl := NewTable()
-		defer func() {
-			if r := recover(); r == nil {
-				t.Errorf("expected panic on empty name")
-			}
-		}()
-		tbl.Register("", 1, false, noopHandler)
+		if err := NewTable().Register("", 1, false, noopHandler); err == nil {
+			t.Errorf("expected an error on empty name")
+		}
 	})
 	t.Run("nil handler", func(t *testing.T) {
-		tbl := NewTable()
-		defer func() {
-			if r := recover(); r == nil {
-				t.Errorf("expected panic on nil handler")
-			}
-		}()
-		tbl.Register("x", 1, false, nil)
+		if err := NewTable().Register("x", 1, false, nil); err == nil {
+			t.Errorf("expected an error on nil handler")
+		}
 	})
 }

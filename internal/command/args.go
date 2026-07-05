@@ -3,6 +3,7 @@ package command
 import (
 	"errors"
 	"math"
+	"strconv"
 
 	"github.com/aura-studio/redimos/v2/internal/resp"
 	"github.com/aura-studio/redimos/v2/internal/server"
@@ -38,6 +39,11 @@ var (
 	// exclusive flags, an unknown option token, or a missing option value).
 	// Requirement 3.5.
 	ErrSyntax = errors.New(resp.ErrSyntax)
+
+	// ErrNotFloat signals that an argument the command required to be a float was
+	// not a valid float (or was NaN). Its text is the exact
+	// "-ERR value is not a valid float" wire message. Requirement 6.1.
+	ErrNotFloat = errors.New(resp.ErrNotValidFloat)
 )
 
 // minInt64Abs is the absolute value of math.MinInt64 (2^63), which does not fit
@@ -116,6 +122,59 @@ func ParseInt(arg []byte) (int64, error) {
 	return int64(v), nil
 }
 
+// ParseFloat parses a command argument as a base-10 float64 (Redis' "value is a valid
+// float" semantics): the whole string must be a finite-or-infinite number and NaN is
+// rejected. It is the float companion of ParseInt. It does NOT accept the score-specific
+// "inf"/"+inf"/"-inf" spellings or a leading "(" exclusive marker — those are handled by
+// parseScore / parseScoreBound, which layer their rules on top of this. On violation it
+// returns ErrNotFloat. Requirement 6.1.
+func ParseFloat(arg []byte) (float64, error) {
+	f, err := strconv.ParseFloat(string(arg), 64)
+	if err != nil || math.IsNaN(f) {
+		return 0, ErrNotFloat
+	}
+	return f, nil
+}
+
+// ParseFloatReply is the float analogue of ParseIntReply: on failure it writes the
+// "-ERR value is not a valid float" reply and returns ok=false. Requirement 6.1.
+func ParseFloatReply(c *server.Conn, arg []byte) (float64, bool) {
+	f, err := ParseFloat(arg)
+	if err != nil {
+		WriteNotFloat(c)
+		return 0, false
+	}
+	return f, true
+}
+
+// WriteNotFloat writes the RESP2 "-ERR value is not a valid float" reply. Requirement 6.1.
+func WriteNotFloat(c *server.Conn) {
+	writeError(c, resp.ErrNotValidFloat)
+}
+
+// Args is a thin typed view over a command's raw arguments for handlers that prefer
+// index-based, self-documenting access instead of manual args[i] indexing plus strconv.
+// Bounds are guaranteed by the router's arity validation before dispatch, so At does not
+// re-check; the typed accessors delegate to the canonical ParseInt/ParseFloat so error
+// text stays byte-for-byte identical everywhere. Adoption is incremental — handlers can be
+// migrated to it over time without changing behavior.
+type Args [][]byte
+
+// Len reports the argument count (including the command name at index 0).
+func (a Args) Len() int { return len(a) }
+
+// At returns the raw bytes at index i (caller ensures i is within the validated arity).
+func (a Args) At(i int) []byte { return a[i] }
+
+// Str returns the argument at index i as a string.
+func (a Args) Str(i int) string { return string(a[i]) }
+
+// Int parses the argument at index i as a strict signed 64-bit integer (ParseInt).
+func (a Args) Int(i int) (int64, error) { return ParseInt(a[i]) }
+
+// Float parses the argument at index i as a float64 (ParseFloat).
+func (a Args) Float(i int) (float64, error) { return ParseFloat(a[i]) }
+
 // ParseIntReply parses arg as an integer with ParseInt. On success it returns
 // the value and ok=true. On failure it writes the
 // "-ERR value is not an integer or out of range" reply to the connection and
@@ -151,6 +210,8 @@ func WriteArgError(c *server.Conn, err error) bool {
 	switch {
 	case errors.Is(err, ErrNotInteger):
 		writeError(c, resp.ErrNotInteger)
+	case errors.Is(err, ErrNotFloat):
+		writeError(c, resp.ErrNotValidFloat)
 	case errors.Is(err, ErrSyntax):
 		writeError(c, resp.ErrSyntax)
 	default:

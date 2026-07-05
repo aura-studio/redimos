@@ -46,12 +46,11 @@ func (r *Router) registerStubs() {
 	// hence no injected SlowLog — was wired. See ensureObservability.
 	r.ensureObservability()
 
-	t := r.Table
-	t.Register("COMMAND", -1, false, handleCommand)
-	t.Register("CLIENT", -2, false, handleClient)
-	t.Register("CONFIG", -2, false, handleConfig)
-	t.Register("DBSIZE", 1, false, r.handleDBSize)
-	t.Register("TIME", 1, false, r.handleTime)
+	r.reg("COMMAND", -1, false, handleCommand)
+	r.reg("CLIENT", -2, false, handleClient)
+	r.reg("CONFIG", -2, false, handleConfig)
+	r.reg("DBSIZE", 1, false, r.handleDBSize)
+	r.reg("TIME", 1, false, r.handleTime)
 
 	// INFO / SLOWLOG are read-only observability commands. They live on the
 	// connection path alongside the other probe stubs so they answer before (and
@@ -61,8 +60,8 @@ func (r *Router) registerStubs() {
 	// Arity notes (Redis command-table convention, name counted):
 	//   - INFO    -1: bare INFO or INFO <section>.
 	//   - SLOWLOG -2: always a subcommand (GET [count] / LEN / RESET).
-	t.Register("INFO", -1, false, r.handleInfo)
-	t.Register("SLOWLOG", -2, false, r.handleSlowlog)
+	r.reg("INFO", -1, false, r.handleInfo)
+	r.reg("SLOWLOG", -2, false, r.handleSlowlog)
 
 	// Server persistence / replication no-op stubs. redimos keeps no RDB/AOF
 	// (DynamoDB is the durable store, every write already persisted) and has no
@@ -73,13 +72,13 @@ func (r *Router) registerStubs() {
 	// Arity notes (Redis 3.2 command-table convention, name counted):
 	//   - SAVE 1 · BGSAVE -1 (optional SCHEDULE) · BGREWRITEAOF 1 · LASTSAVE 1
 	//   - ROLE 1 · WAIT 3 (numreplicas timeout) · PFSELFTEST 1
-	t.Register("SAVE", 1, false, handleSave)
-	t.Register("BGSAVE", -1, false, handleBgSave)
-	t.Register("BGREWRITEAOF", 1, false, handleBgRewriteAOF)
-	t.Register("LASTSAVE", 1, false, r.handleLastSave)
-	t.Register("ROLE", 1, false, handleRole)
-	t.Register("WAIT", 3, false, handleWait)
-	t.Register("PFSELFTEST", 1, false, handlePFSelfTest)
+	r.reg("SAVE", 1, false, handleSave)
+	r.reg("BGSAVE", -1, false, handleBgSave)
+	r.reg("BGREWRITEAOF", 1, false, handleBgRewriteAOF)
+	r.reg("LASTSAVE", 1, false, r.handleLastSave)
+	r.reg("ROLE", 1, false, handleRole)
+	r.reg("WAIT", 3, false, handleWait)
+	r.reg("PFSELFTEST", 1, false, handlePFSelfTest)
 }
 
 // handleSave stubs SAVE. Real Redis synchronously snapshots to an RDB file; redimos

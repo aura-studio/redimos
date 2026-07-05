@@ -36,13 +36,12 @@ const (
 )
 
 func (r *Router) registerBit() {
-	t := r.Table
-	t.Register("SETBIT", 4, true, r.handleSetBit)
-	t.Register("GETBIT", 3, false, r.handleGetBit)
-	t.Register("BITCOUNT", -2, false, r.handleBitCount)
-	t.Register("BITPOS", -3, false, r.handleBitPos)
-	t.Register("BITOP", -4, true, r.handleBitOp)
-	t.Register("BITFIELD", -2, true, r.handleBitField)
+	r.reg("SETBIT", 4, true, r.handleSetBit)
+	r.reg("GETBIT", 3, false, r.handleGetBit)
+	r.reg("BITCOUNT", -2, false, r.handleBitCount)
+	r.reg("BITPOS", -3, false, r.handleBitPos)
+	r.reg("BITOP", -4, true, r.handleBitOp)
+	r.reg("BITFIELD", -2, true, r.handleBitField)
 }
 
 // handleGetBit implements GETBIT key offset. Replies the bit (0/1) at offset; 0

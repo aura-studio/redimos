@@ -51,22 +51,21 @@ import (
 // invoked from registerDataCommands (router_storage.go). Arity counts include the
 // command name; the mutating commands are marked Write.
 func (r *Router) registerHashes() {
-	t := r.Table
-	t.Register("HSET", -4, true, r.handleHSet)
-	t.Register("HSETNX", 4, true, r.handleHSetNX)
-	t.Register("HGET", 3, false, r.handleHGet)
-	t.Register("HMSET", -4, true, r.handleHMSet)
-	t.Register("HMGET", -3, false, r.handleHMGet)
-	t.Register("HGETALL", 2, false, r.handleHGetAll)
-	t.Register("HDEL", -3, true, r.handleHDel)
-	t.Register("HEXISTS", 3, false, r.handleHExists)
-	t.Register("HKEYS", 2, false, r.handleHKeys)
-	t.Register("HVALS", 2, false, r.handleHVals)
-	t.Register("HLEN", 2, false, r.handleHLen)
-	t.Register("HINCRBY", 4, true, r.handleHIncrBy)
-	t.Register("HINCRBYFLOAT", 4, true, r.handleHIncrByFloat)
-	t.Register("HSTRLEN", 3, false, r.handleHStrlen)
-	t.Register("HSCAN", -3, false, r.handleHScan)
+	r.reg("HSET", -4, true, r.handleHSet)
+	r.reg("HSETNX", 4, true, r.handleHSetNX)
+	r.reg("HGET", 3, false, r.handleHGet)
+	r.reg("HMSET", -4, true, r.handleHMSet)
+	r.reg("HMGET", -3, false, r.handleHMGet)
+	r.reg("HGETALL", 2, false, r.handleHGetAll)
+	r.reg("HDEL", -3, true, r.handleHDel)
+	r.reg("HEXISTS", 3, false, r.handleHExists)
+	r.reg("HKEYS", 2, false, r.handleHKeys)
+	r.reg("HVALS", 2, false, r.handleHVals)
+	r.reg("HLEN", 2, false, r.handleHLen)
+	r.reg("HINCRBY", 4, true, r.handleHIncrBy)
+	r.reg("HINCRBYFLOAT", 4, true, r.handleHIncrByFloat)
+	r.reg("HSTRLEN", 3, false, r.handleHStrlen)
+	r.reg("HSCAN", -3, false, r.handleHScan)
 }
 
 // hashState is the outcome of loading a key's meta for a Hash command: whether it

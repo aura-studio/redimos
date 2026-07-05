@@ -44,11 +44,10 @@ var errHLLWrongType = errors.New("WRONGTYPE Key is not a valid HyperLogLog strin
 const errHLLWrongTypeText = "WRONGTYPE Key is not a valid HyperLogLog string value."
 
 func (r *Router) registerHLL() {
-	t := r.Table
-	t.Register("PFADD", -2, true, r.handlePFAdd)
-	t.Register("PFCOUNT", -2, false, r.handlePFCount)
-	t.Register("PFMERGE", -2, true, r.handlePFMerge)
-	t.Register("PFDEBUG", -3, false, r.handlePFDebug)
+	r.reg("PFADD", -2, true, r.handlePFAdd)
+	r.reg("PFCOUNT", -2, false, r.handlePFCount)
+	r.reg("PFMERGE", -2, true, r.handlePFMerge)
+	r.reg("PFDEBUG", -3, false, r.handlePFDebug)
 }
 
 // handlePFDebug implements PFDEBUG <subcommand> <key> (a port of Redis 3.2's

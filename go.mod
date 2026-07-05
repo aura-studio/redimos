@@ -14,6 +14,8 @@ require (
 	github.com/tidwall/redcon v1.6.2
 )
 
+require github.com/anishathalye/porcupine v1.3.0
+
 require (
 	github.com/aura-studio/redimo/v2 v2.6.0
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.26 // indirect

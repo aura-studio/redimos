@@ -29,37 +29,36 @@ import (
 // include the command name; DEL is marked Write (it mutates state), while EXISTS
 // and TYPE are read-only.
 func (r *Router) registerKeys() {
-	t := r.Table
-	t.Register("DEL", -2, true, r.handleDel)
-	t.Register("EXISTS", -2, false, r.handleExists)
+	r.reg("DEL", -2, true, r.handleDel)
+	r.reg("EXISTS", -2, false, r.handleExists)
 	// TOUCH counts how many of the given keys exist. redimos has no LRU/idle clock
 	// to update, so it is byte-for-byte identical to EXISTS (existence count with
 	// multiplicity), matching Redis 3.2's reply.
-	t.Register("TOUCH", -2, false, r.handleExists)
-	t.Register("TYPE", 2, false, r.handleType)
-	t.Register("EXPIRE", 3, true, r.handleExpire)
-	t.Register("EXPIREAT", 3, true, r.handleExpireAt)
-	t.Register("PEXPIRE", 3, true, r.handlePExpire)
-	t.Register("PEXPIREAT", 3, true, r.handlePExpireAt)
-	t.Register("TTL", 2, false, r.handleTTL)
-	t.Register("PTTL", 2, false, r.handlePTTL)
-	t.Register("PERSIST", 2, true, r.handlePersist)
+	r.reg("TOUCH", -2, false, r.handleExists)
+	r.reg("TYPE", 2, false, r.handleType)
+	r.reg("EXPIRE", 3, true, r.handleExpire)
+	r.reg("EXPIREAT", 3, true, r.handleExpireAt)
+	r.reg("PEXPIRE", 3, true, r.handlePExpire)
+	r.reg("PEXPIREAT", 3, true, r.handlePExpireAt)
+	r.reg("TTL", 2, false, r.handleTTL)
+	r.reg("PTTL", 2, false, r.handlePTTL)
+	r.reg("PERSIST", 2, true, r.handlePersist)
 	// SCAN is the cursor-based keyspace iterator (task 17.2); its handler lives in
 	// scan.go. Arity -2 so a bare SCAN still gets the wrong-number-of-arguments
 	// reply while SCAN cursor [MATCH p] [COUNT n] reaches the handler. Read-only.
-	t.Register("SCAN", -2, false, r.handleScan)
+	r.reg("SCAN", -2, false, r.handleScan)
 	// KEYS and RENAME/RENAMENX are registered only to give them a first-class,
 	// byte-for-byte rejection (requirements 10.9, 10.10) rather than the generic
 	// "unknown command" reply. See handleKeys / handleRename below.
-	t.Register("KEYS", 2, false, r.handleKeys)
-	t.Register("RENAME", 3, true, r.handleRename)
-	t.Register("RENAMENX", 3, true, r.handleRename)
+	r.reg("KEYS", 2, false, r.handleKeys)
+	r.reg("RENAME", 3, true, r.handleRename)
+	r.reg("RENAMENX", 3, true, r.handleRename)
 	// FLUSHALL / FLUSHDB are registered only to give them a first-class proxy
 	// rejection rather than the generic "unknown command" reply: flushing the
 	// keyspace would mean a full wipe of the shared DynamoDB table. Arity 1 matches
 	// Redis 3.2 (the command takes no arguments).
-	t.Register("FLUSHALL", 1, true, r.handleFlush)
-	t.Register("FLUSHDB", 1, true, r.handleFlush)
+	r.reg("FLUSHALL", 1, true, r.handleFlush)
+	r.reg("FLUSHDB", 1, true, r.handleFlush)
 }
 
 // Rejection error texts for the guarded / unsupported Key commands. These are

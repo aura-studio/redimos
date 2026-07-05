@@ -2,6 +2,8 @@ package command
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aura-studio/redimos/v2/internal/resp"
@@ -56,6 +58,33 @@ type Router struct {
 	Table   Table
 	Config  Config
 	Storage Storage
+
+	// regErrs accumulates registration errors during construction so all bad
+	// registrations are reported together by finishRegistration.
+	regErrs []error
+}
+
+// reg registers a command, collecting any error instead of aborting so the whole
+// registration pass can complete and finishRegistration can summarize every problem.
+func (r *Router) reg(name string, arity int, write bool, h Handler) {
+	if err := r.Table.Register(name, arity, write, h); err != nil {
+		r.regErrs = append(r.regErrs, err)
+	}
+}
+
+// finishRegistration fails fast with an aggregated summary if any command failed to
+// register. Registration happens once at startup and a bad table is a programming error,
+// so a panic is appropriate — but it now lists ALL offending registrations at once.
+func (r *Router) finishRegistration() {
+	if len(r.regErrs) == 0 {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "command: %d invalid command registration(s):", len(r.regErrs))
+	for _, e := range r.regErrs {
+		fmt.Fprintf(&b, "\n  - %v", e)
+	}
+	panic(b.String())
 }
 
 // NewRouter builds a Router with a fresh command Table, registers the handshake
@@ -65,6 +94,7 @@ type Router struct {
 func NewRouter(cfg Config) *Router {
 	r := &Router{Table: NewTable(), Config: cfg}
 	r.registerConnection()
+	r.finishRegistration()
 	return r
 }
 
@@ -98,18 +128,17 @@ var _ server.Dispatcher = (*Router)(nil)
 // on the router's table. AUTH and SELECT are bound methods so they can read the
 // router's Config; the rest are config-free package functions.
 func (r *Router) registerConnection() {
-	t := r.Table
 	// HELLO takes optional args (e.g. "HELLO 3 AUTH user pass"); accept any
 	// form (arity -1) so the handler can always emit the exact unknown-command
 	// reply regardless of arguments. Requirement 2.1.
-	t.Register("HELLO", -1, false, handleHello)
+	r.reg("HELLO", -1, false, handleHello)
 	// PING accepts zero or one argument; arity -1 lets the handler distinguish
 	// the two forms and reject 2+ args itself. Requirement 2.2, 2.3.
-	t.Register("PING", -1, false, handlePing)
-	t.Register("ECHO", 2, false, handleEcho)
-	t.Register("AUTH", 2, false, r.handleAuth)
-	t.Register("SELECT", 2, false, r.handleSelect)
-	t.Register("QUIT", 1, false, handleQuit)
+	r.reg("PING", -1, false, handlePing)
+	r.reg("ECHO", 2, false, handleEcho)
+	r.reg("AUTH", 2, false, r.handleAuth)
+	r.reg("SELECT", 2, false, r.handleSelect)
+	r.reg("QUIT", 1, false, handleQuit)
 
 	// Client-probe fallback stubs (COMMAND/CLIENT/CONFIG/DBSIZE/TIME) live on the
 	// same connection-level path as PING/ECHO so they work before (and without) a
