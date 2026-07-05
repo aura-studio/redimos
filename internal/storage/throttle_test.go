@@ -78,7 +78,7 @@ func (s stubStore) GetString(context.Context, string) ([]byte, bool, error) {
 func TestThrottleStore_FiresHookAndMapsToErrThrottled(t *testing.T) {
 	fired := 0
 	throttle := &types.ProvisionedThroughputExceededException{}
-	ts := newThrottleStore(stubStore{err: throttle}, func() { fired++ })
+	ts := newThrottleStore(stubStore{err: throttle}, func() { fired++ }, nil)
 
 	// A write path: SetString returns the throttle, so the decorator must map it
 	// to ErrThrottled and fire the alert hook exactly once.
@@ -105,7 +105,7 @@ func TestThrottleStore_PassesThroughNonThrottleAndSuccess(t *testing.T) {
 
 	// A non-throttle error passes through unchanged and does not fire the hook.
 	other := errors.New("some other backend error")
-	ts := newThrottleStore(stubStore{err: other}, hook)
+	ts := newThrottleStore(stubStore{err: other}, hook, nil)
 	if err := ts.SetString(context.Background(), "0:k", nil); !errors.Is(err, other) {
 		t.Fatalf("non-throttle error = %v, want it to pass through unchanged", err)
 	}
@@ -117,7 +117,7 @@ func TestThrottleStore_PassesThroughNonThrottleAndSuccess(t *testing.T) {
 	}
 
 	// Success passes through with no hook.
-	ok := newThrottleStore(stubStore{err: nil}, hook)
+	ok := newThrottleStore(stubStore{err: nil}, hook, nil)
 	if err := ok.SetString(context.Background(), "0:k", nil); err != nil {
 		t.Fatalf("SetString on success = %v, want nil", err)
 	}
@@ -129,7 +129,7 @@ func TestThrottleStore_PassesThroughNonThrottleAndSuccess(t *testing.T) {
 func TestThrottleStore_NilHookStillMaps(t *testing.T) {
 	// With no alerting hook, throttles must still be surfaced as ErrThrottled so
 	// the command layer can reply (requirement 18.8).
-	ts := newThrottleStore(stubStore{err: &types.ProvisionedThroughputExceededException{}}, nil)
+	ts := newThrottleStore(stubStore{err: &types.ProvisionedThroughputExceededException{}}, nil, nil)
 	if err := ts.SetString(context.Background(), "0:k", nil); !errors.Is(err, ErrThrottled) {
 		t.Fatalf("SetString error = %v, want it to wrap ErrThrottled even without a hook", err)
 	}

@@ -70,7 +70,7 @@ func TestFaultInjection_RawThrottleClassifiedAndAlerts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fired := 0
-			ts := newThrottleStore(faultInjectingStore{injected: raw}, func() { fired++ })
+			ts := newThrottleStore(faultInjectingStore{injected: raw}, func() { fired++ }, nil)
 
 			err := tc.call(ts)
 			if !errors.Is(err, ErrThrottled) {
@@ -93,7 +93,7 @@ func TestFaultInjection_NonThrottleFaultNotAlerted(t *testing.T) {
 	other := errors.New("ValidationException: some other backend failure")
 
 	fired := 0
-	ts := newThrottleStore(faultInjectingStore{injected: other}, func() { fired++ })
+	ts := newThrottleStore(faultInjectingStore{injected: other}, func() { fired++ }, nil)
 
 	_, err := ts.SAdd(ctx, "0:k", []string{"m"})
 	if !errors.Is(err, other) {

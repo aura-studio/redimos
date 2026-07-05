@@ -85,24 +85,30 @@ func IsThrottled(err error) bool {
 type throttleStore struct {
 	inner      Store
 	onThrottle func()
+	breaker    *CircuitBreaker // nil = disabled
 }
 
 // newThrottleStore wraps inner so throttling errors are classified as ErrThrottled
-// and onThrottle (when non-nil) is invoked on each observed throttle.
-func newThrottleStore(inner Store, onThrottle func()) *throttleStore {
-	return &throttleStore{inner: inner, onThrottle: onThrottle}
+// and onThrottle (when non-nil) is invoked on each observed throttle. breaker, when
+// non-nil, records every outcome so it can shed load during a sustained throttle.
+func newThrottleStore(inner Store, onThrottle func(), breaker *CircuitBreaker) *throttleStore {
+	return &throttleStore{inner: inner, onThrottle: onThrottle, breaker: breaker}
 }
 
 var _ Store = (*throttleStore)(nil)
 
-// obs is the single choke point: it classifies err, fires the alert hook on a
-// throttle, and returns ErrThrottled (wrapping the original so logs keep the
-// backend detail) or the original error unchanged.
+// obs is the single choke point: it classifies err, feeds the circuit breaker (so a
+// throttle storm can be shed), fires the alert hook on a throttle, and returns
+// ErrThrottled (wrapping the original so logs keep the backend detail) or the
+// original error unchanged.
 func (t *throttleStore) obs(err error) error {
+	throttled := IsThrottled(err) // false for a nil error
+	t.breaker.Record(throttled)   // nil-safe
+
 	if err == nil {
 		return nil
 	}
-	if IsThrottled(err) {
+	if throttled {
 		if t.onThrottle != nil {
 			t.onThrottle()
 		}

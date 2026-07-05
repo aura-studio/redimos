@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -108,11 +109,25 @@ func run(cfg appConfig) error {
 	registry.MustRegister(throttled)
 	onThrottle := func() { throttled.Inc() }
 
+	// Optional load-shedding circuit breaker (opt-in via -circuit-breaker-threshold):
+	// after N accumulated throttles it opens, and the command layer fails backend
+	// commands fast until it recovers. Its trip count is surfaced as a gauge.
+	var breaker *storage.CircuitBreaker
+	if cfg.cbThreshold > 0 {
+		breaker = storage.NewCircuitBreaker(cfg.cbThreshold, cfg.cbCooldown)
+		registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Namespace: "redimos",
+			Name:      "circuit_breaker_trips_total",
+			Help:      "Number of times the load-shedding circuit breaker has opened.",
+		}, func() float64 { return float64(breaker.Trips()) }))
+	}
+
 	store := storage.New(ddb, storage.Options{
 		TableName:            cfg.table,
 		EventuallyConsistent: strings.EqualFold(cfg.consistency, "eventual"),
 		DeleteBatchSize:      cfg.deleteBatch,
 		OnThrottle:           onThrottle,
+		Breaker:              breaker,
 	})
 
 	// --- meta: lazy deleter + meta store + read path + orphan sweeper -------
@@ -198,7 +213,12 @@ func run(cfg appConfig) error {
 	// wrapper when -command-timeout is 0) which — because the ctx threads to DynamoDB —
 	// bounds a command's backend work end-to-end.
 	timed := command.NewTimeoutDispatcher(router, cfg.commandTimeout)
-	dispatcher := command.NewObservedDispatcher(timed, m, slowlog, cfg.slowlogThreshold)
+	broken := command.NewBreakerDispatcher(timed, breaker)
+	dispatcher := command.NewObservedDispatcher(broken, m, slowlog, cfg.slowlogThreshold)
+	if level, _ := requestLogLevel(cfg.requestLog); level != command.LogNone {
+		// PII-safe structured request logging (JSON to stderr): validated at startup.
+		dispatcher = dispatcher.WithRequestLog(slog.New(slog.NewJSONHandler(os.Stderr, nil)), level)
+	}
 	srv := server.New(server.Options{Addr: cfg.addr, InstID: instID, MaxCommandBytes: cfg.maxCommandBytes}, dispatcher)
 
 	// Start the background reclaimers on a detached context so a shutdown signal
@@ -324,6 +344,23 @@ func run(cfg appConfig) error {
 
 	log.Printf("redimos: shutdown complete in %s", time.Since(shutdownStart).Round(time.Millisecond))
 	return nil
+}
+
+// requestLogLevel maps the -request-log flag string to a command.RequestLogLevel.
+// An unrecognized value is an error so validateConfig fails fast at startup.
+func requestLogLevel(s string) (command.RequestLogLevel, error) {
+	switch s {
+	case "none", "":
+		return command.LogNone, nil
+	case "error":
+		return command.LogErrors, nil
+	case "slow":
+		return command.LogSlow, nil
+	case "all":
+		return command.LogAll, nil
+	default:
+		return command.LogNone, fmt.Errorf("-request-log must be none|error|slow|all, got %q", s)
+	}
 }
 
 // sweepInitialDelay returns a short, jittered delay for the FIRST orphan sweep after

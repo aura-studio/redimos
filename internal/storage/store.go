@@ -740,6 +740,11 @@ type Options struct {
 	// classified and surfaced as ErrThrottled so the command layer replies with
 	// the retryable "-ERR backend throttled, retry later".
 	OnThrottle func()
+
+	// Breaker, when non-nil, is a CircuitBreaker fed every operation outcome so it
+	// can shed load during a sustained throttle storm. The command layer consults its
+	// Open() state to fail fast. A nil Breaker disables load shedding (the default).
+	Breaker *CircuitBreaker
 }
 
 // redimoStore is the redimo-backed Store implementation.

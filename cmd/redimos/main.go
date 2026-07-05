@@ -45,6 +45,9 @@ type appConfig struct {
 	deleteBatch    int    // lazy-delete BatchWriteItem size
 	deleteRate     float64
 
+	cbThreshold int           // circuit-breaker throttle threshold (0 disables load shedding)
+	cbCooldown  time.Duration // circuit-breaker open duration
+
 	// SCAN cursor registry.
 	instID       string        // proxy instance id (shared with scan registry)
 	scanCapacity int           // max live SCAN cursors
@@ -58,6 +61,7 @@ type appConfig struct {
 	metricsAddr      string        // HTTP address for /metrics and /healthz
 	slowlogThreshold time.Duration // min duration recorded in the slowlog ring
 	slowlogCapacity  int           // slowlog ring size
+	requestLog       string        // structured request-log level: none|error|slow|all
 }
 
 func parseFlags() appConfig {
@@ -77,6 +81,8 @@ func parseFlags() appConfig {
 	flag.IntVar(&c.retryMax, "retry-max-attempts", 5, "AWS SDK max attempts for throttling retry/backoff")
 	flag.IntVar(&c.deleteBatch, "delete-batch-size", 25, "lazy-delete BatchWriteItem size (1-25)")
 	flag.Float64Var(&c.deleteRate, "delete-rate", 50, "lazy-delete pks processed per second (<=0 disables rate limiting)")
+	flag.IntVar(&c.cbThreshold, "circuit-breaker-threshold", 0, "open the load-shedding circuit breaker after N accumulated DynamoDB throttles (0 disables)")
+	flag.DurationVar(&c.cbCooldown, "circuit-breaker-cooldown", 5*time.Second, "how long the circuit breaker sheds load once open")
 
 	flag.StringVar(&c.instID, "inst-id", "", "proxy instance id for SCAN cursor ownership (empty generates one)")
 	flag.IntVar(&c.scanCapacity, "scan-capacity", scan.DefaultCapacity, "maximum number of live SCAN cursors")
@@ -88,6 +94,7 @@ func parseFlags() appConfig {
 	flag.StringVar(&c.metricsAddr, "metrics-addr", ":9121", "HTTP listen address for /metrics and /healthz")
 	flag.DurationVar(&c.slowlogThreshold, "slowlog-threshold", 10*time.Millisecond, "minimum command duration recorded in the slowlog ring")
 	flag.IntVar(&c.slowlogCapacity, "slowlog-capacity", metrics.DefaultSlowlogCapacity, "slowlog ring buffer capacity")
+	flag.StringVar(&c.requestLog, "request-log", "none", "PII-safe structured (JSON) request logging level: none|error|slow|all")
 
 	flag.Parse()
 	return c
@@ -128,6 +135,9 @@ func validateConfig(cfg appConfig) error {
 	if cfg.slowlogCapacity < 1 {
 		return fmt.Errorf("-slowlog-capacity must be >= 1, got %d", cfg.slowlogCapacity)
 	}
+	if _, err := requestLogLevel(cfg.requestLog); err != nil {
+		return err
+	}
 	if cfg.maxCollectionResult < 0 {
 		return fmt.Errorf("-max-collection-result must be >= 0, got %d", cfg.maxCollectionResult)
 	}
@@ -136,6 +146,12 @@ func validateConfig(cfg appConfig) error {
 	}
 	if cfg.commandTimeout < 0 {
 		return fmt.Errorf("-command-timeout must be >= 0, got %s", cfg.commandTimeout)
+	}
+	if cfg.cbThreshold < 0 {
+		return fmt.Errorf("-circuit-breaker-threshold must be >= 0, got %d", cfg.cbThreshold)
+	}
+	if cfg.cbThreshold > 0 && cfg.cbCooldown <= 0 {
+		return fmt.Errorf("-circuit-breaker-cooldown must be > 0 when the breaker is enabled, got %s", cfg.cbCooldown)
 	}
 	if cfg.scanTimeout < 0 {
 		return fmt.Errorf("-scan-timeout must be >= 0, got %s", cfg.scanTimeout)

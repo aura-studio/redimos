@@ -30,7 +30,7 @@ func New(ddb *dynamodb.Client, opts Options) Store {
 	// the OnThrottle alerting hook (requirement 18.8). Retry/backoff for throttling
 	// is handled by the AWS SDK client's retryer (see throttle.go / ErrThrottled).
 	base := &redimoStore{client: c, deleteBatchSize: clampBatchSize(opts.DeleteBatchSize)}
-	return newThrottleStore(base, opts.OnThrottle)
+	return newThrottleStore(base, opts.OnThrottle, opts.Breaker)
 }
 
 // NewFromClient wraps an already-configured redimo.Client. Useful when the caller
@@ -39,7 +39,7 @@ func New(ddb *dynamodb.Client, opts Options) Store {
 // errors are still surfaced as ErrThrottled for the command layer to map.
 func NewFromClient(client redimo.Client) Store {
 	base := &redimoStore{client: client, deleteBatchSize: redimo.MaxBatchWriteItems}
-	return newThrottleStore(base, nil)
+	return newThrottleStore(base, nil, nil)
 }
 
 // clampBatchSize normalizes a configured delete batch size to the DynamoDB per-call
