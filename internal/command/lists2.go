@@ -100,7 +100,7 @@ func (r *Router) handleLSet(ctx context.Context, c *server.Conn, args [][]byte) 
 		w.Error(resp.ErrNotInteger)
 		return
 	}
-	if err := guard.CheckWrite(key, [][]byte{value}, nil); err != nil {
+	if err := guard.CheckWrite(key, nil, [][]byte{value}); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -348,7 +348,7 @@ func (r *Router) handleLInsert(ctx context.Context, c *server.Conn, args [][]byt
 		return
 	}
 
-	if err := guard.CheckWrite(key, [][]byte{value}, nil); err != nil {
+	if err := guard.CheckWrite(key, nil, [][]byte{value}); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

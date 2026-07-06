@@ -154,11 +154,12 @@ func ParseFloat(arg []byte) (float64, error) {
 	return f, nil
 }
 
-// parseHexNoExp accepts a C-strtod-style hex INTEGER constant that lacks the binary 'p'
-// exponent Go's ParseFloat requires (e.g. "0x1f", "-0x10") by appending "p0" and
-// re-parsing. It returns ok=false for anything that is not such a constant — including hex
-// values that already have an exponent or a fractional '.' — leaving ParseFloat's normal
-// rejection in place.
+// parseHexNoExp accepts a C-strtod-style hex float constant that lacks the binary 'p'
+// exponent Go's ParseFloat requires (e.g. "0x10" -> 16, "0x1.8" -> 1.5, "0x.8" -> 0.5,
+// "-0x1f" -> -31) by appending "p0" and re-parsing. glibc strtod accepts BOTH hex
+// integers AND hex fractions without a 'p' exponent, so both must be rescued. It returns
+// ok=false only when the value already carries a 'p'/'P' exponent (ParseFloat's normal
+// path handles that) or is not a hex constant, leaving normal rejection in place.
 func parseHexNoExp(s string) (float64, bool) {
 	body := s
 	if len(body) > 0 && (body[0] == '+' || body[0] == '-') {
@@ -167,7 +168,7 @@ func parseHexNoExp(s string) (float64, bool) {
 	if len(body) < 3 || body[0] != '0' || (body[1] != 'x' && body[1] != 'X') {
 		return 0, false
 	}
-	if strings.ContainsAny(body, "pP.") {
+	if strings.ContainsAny(body, "pP") {
 		return 0, false
 	}
 	f, err := strconv.ParseFloat(s+"p0", 64)

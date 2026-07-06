@@ -221,10 +221,33 @@ func parseScoreBound(arg []byte) (storage.ScoreBound, bool) {
 
 	f, ok := parseScore(trimmed)
 	if !ok {
-		return storage.ScoreBound{}, false
+		// A range bound is NEVER persisted, so — unlike a stored ZADD score — Redis'
+		// zslParseRange strtod SATURATES an out-of-float64-range magnitude to ±Inf
+		// (overflow, e.g. 1e400) or 0 (underflow) and ACCEPTS it. parseScore rejects
+		// such values (storeScore must), so recover the saturated value here.
+		f, ok = saturateOutOfRangeFloat(trimmed)
+		if !ok {
+			return storage.ScoreBound{}, false
+		}
 	}
 
 	return storage.ScoreBound{Value: f, Exclusive: exclusive}, true
+}
+
+// saturateOutOfRangeFloat returns the ±Inf/0 value strconv.ParseFloat produces for an
+// out-of-range magnitude (its ErrRange case), matching strtod's saturation for a range
+// bound. It returns ok=false for anything that is NOT a clean numeric overflow/underflow
+// (garbage, NaN, Go underscore separators) so those stay rejected.
+func saturateOutOfRangeFloat(arg []byte) (float64, bool) {
+	s := string(arg)
+	if strings.IndexByte(s, '_') >= 0 {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange && !math.IsNaN(f) {
+		return f, true
+	}
+	return 0, false
 }
 
 // trimLeadingSpace drops the leading ASCII whitespace strtod skips (space, tab, and

@@ -243,9 +243,11 @@ func parseStoredFloat(b []byte) (float64, error) {
 	return f, nil
 }
 
-// parseHexNoExpStored accepts a strtod-style hex INTEGER constant lacking the binary 'p'
-// exponent Go requires ("0x1f", "-0x10") by appending "p0" and re-parsing; ok=false for
-// anything else (already has an exponent or a fractional '.').
+// parseHexNoExpStored accepts a strtod-style hex float constant lacking the binary 'p'
+// exponent Go requires — both hex integers ("0x1f") and hex fractions ("0x1.8" -> 1.5) —
+// by appending "p0" and re-parsing; ok=false only when a 'p'/'P' exponent is already
+// present or it is not a hex constant. Mirrors command.parseHexNoExp for the stored-value
+// INCRBYFLOAT/HINCRBYFLOAT read path.
 func parseHexNoExpStored(s string) (float64, bool) {
 	body := s
 	if len(body) > 0 && (body[0] == '+' || body[0] == '-') {
@@ -254,7 +256,7 @@ func parseHexNoExpStored(s string) (float64, bool) {
 	if len(body) < 3 || body[0] != '0' || (body[1] != 'x' && body[1] != 'X') {
 		return 0, false
 	}
-	if strings.ContainsAny(body, "pP.") {
+	if strings.ContainsAny(body, "pP") {
 		return 0, false
 	}
 	f, err := strconv.ParseFloat(s+"p0", 64)

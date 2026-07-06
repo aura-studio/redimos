@@ -105,27 +105,47 @@ func NewRouter(cfg Config) *Router {
 	return r
 }
 
-// Dispatch applies the NOAUTH gate, then forwards to the command Table.
+// Dispatch mirrors Redis 3.2 processCommand's ordering: QUIT is special-cased at the
+// very top, then the command is looked up and arity-validated, and ONLY THEN is the
+// NOAUTH gate applied, before the handler runs.
 //
-// Per design algorithm 4 the gate runs before command lookup: when a
-// requirepass is configured and the connection has not authenticated, every
-// command except AUTH and QUIT is rejected with "-NOAUTH Authentication
-// required." (requirement 2.6). When requirepass is empty the gate is skipped
-// entirely and all connections are treated as authenticated.
+//  1. QUIT (case-insensitive) replies "+OK" and closes REGARDLESS of argument count and
+//     even on an unauthenticated connection — Redis handles it before lookup/arity/auth.
+//  2. An unknown command ("-ERR unknown command '<name>'") or a wrong arity
+//     ("-ERR wrong number of arguments ...") is reported even on an unauthenticated
+//     connection — the lookup and arity checks precede the auth gate.
+//  3. NOAUTH gate: with a requirepass configured and the connection not yet
+//     authenticated, every command except AUTH (QUIT already handled above) replies
+//     "-NOAUTH Authentication required." When requirepass is empty the gate is skipped.
 func (r *Router) Dispatch(ctx context.Context, c *server.Conn, args [][]byte) {
 	if len(args) == 0 {
 		return
 	}
 
-	if r.Config.RequirePass != "" && !c.Authed() {
-		name := toLower(string(args[0]))
-		if name != "auth" && name != "quit" {
-			writeError(c, resp.ErrNoAuth)
-			return
-		}
+	// (1) QUIT special-case — before lookup, arity and the auth gate.
+	if toLower(string(args[0])) == "quit" {
+		handleQuit(ctx, c, args)
+		return
 	}
 
-	r.Table.Dispatch(ctx, c, args)
+	// (2) Command lookup + arity, before the auth gate.
+	spec, ok := r.Table.Lookup(string(args[0]))
+	if !ok {
+		writeError(c, resp.ErrUnknownCommand(string(args[0])))
+		return
+	}
+	if !spec.arityOK(len(args)) {
+		writeError(c, resp.ErrWrongNumberOfArgs(spec.Name))
+		return
+	}
+
+	// (3) NOAUTH gate — AUTH is the only command permitted while unauthenticated.
+	if r.Config.RequirePass != "" && !c.Authed() && spec.Name != "auth" {
+		writeError(c, resp.ErrNoAuth)
+		return
+	}
+
+	spec.Handler(ctx, c, args)
 }
 
 // Ensure *Router satisfies the server dispatch seam at compile time.
@@ -198,6 +218,10 @@ func (r *Router) handleAuth(_ context.Context, c *server.Conn, args [][]byte) {
 	// on a length mismatch (which itself leaks only the length), so the running
 	// time does not depend on how many leading bytes matched.
 	if subtle.ConstantTimeCompare(args[1], []byte(r.Config.RequirePass)) != 1 {
+		// Redis authCommand sets authenticated=0 on a password mismatch, so a wrong
+		// AUTH REVOKES an already-authenticated session (a later command then gets
+		// NOAUTH), not merely rejects this one command.
+		c.SetAuthed(false)
 		w.Error(resp.ErrInvalidPassword)
 		return
 	}

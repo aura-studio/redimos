@@ -24,7 +24,7 @@ import (
 //
 // Collection write-path pattern (shared with the other families via datacmd.go):
 //
-//	guard.CheckWrite(key, elements, nil)          // size limits, no partial write
+//	guard.CheckWrite(key, nil, elements)          // element = VALUE (390KB), not name (1KB)
 //	  -> Meta.EnsureType(TypeList, 0)             // create key + type check (WRONGTYPE)
 //	  -> Store.L<op>(...)                          // element mutation; returns net member delta
 //	  -> r.adjustCount(pk, TypeList, delta)        // atomic cnt maintenance, deletes key when empty
@@ -116,7 +116,7 @@ func (r *Router) handleLPush(ctx context.Context, c *server.Conn, args [][]byte)
 	elements := args[2:]
 
 	pk := encodePK(c.DB(), key)
-	if err := guard.CheckWrite(key, elements, nil); err != nil {
+	if err := guard.CheckWrite(key, nil, elements); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -135,7 +135,7 @@ func (r *Router) handleRPush(ctx context.Context, c *server.Conn, args [][]byte)
 	elements := args[2:]
 
 	pk := encodePK(c.DB(), key)
-	if err := guard.CheckWrite(key, elements, nil); err != nil {
+	if err := guard.CheckWrite(key, nil, elements); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -186,7 +186,7 @@ func (r *Router) pushXCommon(
 		return
 	}
 
-	if err := guard.CheckWrite(key, elements, nil); err != nil {
+	if err := guard.CheckWrite(key, nil, elements); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

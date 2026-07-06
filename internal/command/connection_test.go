@@ -198,6 +198,50 @@ func TestNoAuthGateExemptsAuthAndQuit(t *testing.T) {
 	}
 }
 
+// TestAuthFailedAfterSuccessDeauthenticates: Redis authCommand sets authenticated=0 on a
+// wrong password, so a failed AUTH REVOKES an already-authenticated session.
+func TestAuthFailedAfterSuccessDeauthenticates(t *testing.T) {
+	conn, r := startConnServer(t, Config{RequirePass: "s3cret"})
+	if got, want := sendRead(t, conn, r, "AUTH s3cret"), "+OK"; got != want {
+		t.Fatalf("AUTH s3cret = %q, want %q", got, want)
+	}
+	if got, want := sendRead(t, conn, r, "ECHO x"), "$x"; got != want {
+		t.Fatalf("post-auth ECHO = %q, want %q", got, want)
+	}
+	if got, want := sendRead(t, conn, r, "AUTH wrong"), "-ERR invalid password"; got != want {
+		t.Fatalf("AUTH wrong = %q, want %q", got, want)
+	}
+	// The wrong AUTH revoked the session.
+	if got, want := sendRead(t, conn, r, "ECHO x"), "-NOAUTH Authentication required."; got != want {
+		t.Errorf("post-failed-auth ECHO = %q, want %q (session must be de-authenticated)", got, want)
+	}
+}
+
+// TestNoAuthGateAfterLookupAndArity: Redis processCommand runs command lookup and arity
+// validation BEFORE the NOAUTH gate, so an unknown command or a bad arity is reported even
+// on an unauthenticated connection; only a valid, known command is gated.
+func TestNoAuthGateAfterLookupAndArity(t *testing.T) {
+	conn, r := startConnServer(t, Config{RequirePass: "s3cret"})
+	if got, want := sendRead(t, conn, r, "FOOBAR"), "-ERR unknown command 'FOOBAR'"; got != want {
+		t.Errorf("unauth FOOBAR = %q, want %q (unknown-command precedes NOAUTH)", got, want)
+	}
+	if got, want := sendRead(t, conn, r, "ECHO"), "-ERR wrong number of arguments for 'echo' command"; got != want {
+		t.Errorf("unauth ECHO (bad arity) = %q, want %q (arity precedes NOAUTH)", got, want)
+	}
+	if got, want := sendRead(t, conn, r, "ECHO x"), "-NOAUTH Authentication required."; got != want {
+		t.Errorf("unauth ECHO x (valid) = %q, want %q (gated)", got, want)
+	}
+}
+
+// TestQuitIgnoresExtraArgs: QUIT is special-cased before arity validation, so extra
+// arguments are ignored — it replies +OK and closes regardless of argument count.
+func TestQuitIgnoresExtraArgs(t *testing.T) {
+	conn, r := startConnServer(t, Config{RequirePass: "pw"})
+	if got, want := sendRead(t, conn, r, "QUIT foo bar"), "+OK"; got != want {
+		t.Errorf("QUIT foo bar = %q, want %q", got, want)
+	}
+}
+
 func TestNoGateWhenRequirepassEmpty(t *testing.T) {
 	conn, r := startConnServer(t, Config{})
 	// With no requirepass, business commands run without AUTH.

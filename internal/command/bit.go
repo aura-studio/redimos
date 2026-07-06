@@ -145,24 +145,30 @@ func (r *Router) handleBitCount(ctx context.Context, c *server.Conn, args [][]by
 		w.Error(resp.ErrSyntax)
 		return
 	}
-	if len(cur) == 0 {
-		w.Int(0)
-		return
-	}
 
 	lo, hi := 0, len(cur)-1
 	if len(args) == 4 {
+		// Redis parses BOTH range args (getLongFromObjectOrReply) BEFORE checking for an
+		// empty value, so a non-integer bound errors even on an empty string.
 		s, ok1 := parseIntArg(args[2])
 		e, ok2 := parseIntArg(args[3])
 		if !ok1 || !ok2 {
 			w.Error(resp.ErrNotInteger)
 			return
 		}
-		lo, hi = byteRange(len(cur), s, e)
-		if lo > hi {
+		// Redis' pre-clamp guard: two negative indices with start > end short-circuit to
+		// :0 BEFORE resolving negatives, so BITCOUNT k -100 -200 is :0 (not a count of the
+		// clamped byte 0). Uses the RAW indices.
+		if s < 0 && e < 0 && s > e {
 			w.Int(0)
 			return
 		}
+		lo, hi = byteRange(len(cur), s, e)
+	}
+	// An empty value (or a resolved range with start > end) has no bytes to count.
+	if len(cur) == 0 || lo > hi {
+		w.Int(0)
+		return
 	}
 
 	var count int64
