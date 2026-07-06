@@ -18,10 +18,10 @@
 |---|---|
 | 命令覆盖 | 174 条中 **114 条经 redimo 存储支持**（含 GEO+`_ro`、BIT、HLL+`PFDEBUG`）；**42 条代理拒绝**（专属错误消息）；**14 条连接/桩**（含 SAVE/BGSAVE/…/WAIT/ROLE/PFSELFTEST 固定回复桩）；**4 条连接层**。**未知命令路径清零**：174 条真实 3.2 命令**全部显式处理**（v1.18.0 起，连 `dump`/`restore`/`migrate`/`sync`/`psync`/`slaveof` 等实现不了的也注册为代理拒绝而非未知命令） |
 | **字符/字节安全** | ✅ **完全对齐**：key、string 值、hash 字段名/值、set/zset 成员、list 元素对 0x00–0xff 全部 256 个字节值与 Redis 一致，无碰撞（v2.0.1 起） |
-| **并发原子性** | ⚠️ **部分等同**：单项读改写（INCR/HINCRBY/APPEND…）、分值自增、**SET NX/SETNX（v1.9.0 起）**已原子；其余多项/多步写（S\*STORE、Z\*STORE、SMOVE、RPOPLPUSH、部分写可见性）**非原子**——受 DynamoDB 单事务 100 项上限所限，大结果集无法完全等同 Redis 单线程模型 |
+| **并发原子性** | ⚠️ **部分等同**：单项读改写（INCR/HINCRBY/APPEND…）、分值自增、**SET NX/SETNX（v1.9.0 起）**已原子；**SCARD/HLEN/ZCARD 计数并发下精确（redimo v3.1.0 条件写）**；其余多项/多步写（S\*STORE、Z\*STORE、SMOVE、RPOPLPUSH、列表整表 RMW 的 LLEN）**非原子**——受 DynamoDB 单事务 100 项上限所限，大结果集无法完全等同 Redis 单线程模型 |
 | 差分（单连接） | 大量命令字节一致；残余差异见 §4 |
 
-一句话：**单连接 / 无争用下 redimos 与 Redis 3.2 高度兼容（命令语义 A–P + 线级协议 Q + 并发 AC + 被拒命令 S 共 ~20 维对真 `redis:3.2` 逐字节实测全绿）；剩余差异均为来自 DynamoDB 后端 / 代理设计 / redcon 的结构性分歧,已充分刻画并决定接受不修——完整清单见 §4「已知残余差异」、决策见 §6。** 测试维度层面已到「兼容性地板」（2026-07-06）。
+一句话：**单连接 / 无争用下 redimos 与 Redis 3.2 高度兼容（命令语义 A–P + 线级协议 Q + 并发 AC + 被拒命令 S 共 ~20 维对真 `redis:3.2` 逐字节实测全绿）；并发下最后一个「可完全修 + 有真实影响」的分歧——cnt 计数漂移——已于 redimo v3.1.0 根治（SCARD/HLEN/ZCARD 现精确）；其余残余差异均为来自 DynamoDB 后端 / 代理设计 / redcon 的结构性分歧,已充分刻画并决定接受不修——完整清单见 §4「已知残余差异」、决策见 §6。** 测试维度层面已到「兼容性地板」（2026-07-06）。
 
 ---
 
@@ -86,6 +86,7 @@
 | redimo **v3.0.0** / redimos **v1.37.0** | **🔑 幻影空成员根治(破坏性 on-disk 编码分离,Go 主版本升 /v3)**。根因:值项 `sk=0x00` 与集合空成员 `encodeSK("")` 碰撞同一字节,SET-over-集合→DEL→重建时残留值项被读成幻影 `""` 成员。v3:`encodeSK("")`→`0x01`(空成员)、新 `valueItemKey()`→`0x00`(值项专属,仿 metaItemKey)、9 个集合读加 `isValueItem` 过滤、删/回收路径改按 raw 存储键删(`decodeSK(0x00)` 不再回编到 0x00,顺带修好 `#meta 0x02` 也漏删的潜伏 bug + 重写 DEL)。旧 String 数据不动(值项仍 0x00),唯破坏=v2 写的空成员(在 0x00)需 v3 下重写。对抗 5-lens 验证 ship 零缺陷;redimos 撤掉 v1.36 的 handleDel 同步回收兜底,全 A–P 差分全绿 3× |
 | redimos **v1.38.0** | **新维度 Q(RESP2 线级协议)+ 补 A–P 深度缺口**(纯测试,docker 3× 全绿)。Q:inline 命令、pipelining 回包序、零长 bulk vs 空 bulk、命令名+选项大小写不敏感、unknown-command 回文、协议错误帧(harness 加 `respConn.raw/rawReplies` + `eqRaw/eqPipeline/eqRawFresh`)。深度:E(TTL 跨命令保留/清除)、L(变更返回值)、A(纯字符串命令 WRONGTYPE 先于操作)、B(非整数解析)、C(MGET 混合态)、D(int64/反转区间)、H(逐命令多 DB 隔离)、P(类型覆盖)、F/G/N(空集合/二进制/位运算边)、S(21 条被拒命令契约:一等错误 + 连接存活)。**逼出 §4.4 的 redcon 超大帧 DoS** |
 | redimos **v1.39.0** | **新维度 AC(原子性/并发)——重测当前版本的真实并发保证**(纯测试,docker 2×+全绿)。确认原子路径精确(不同成员 SADD/HSET/RPUSH、INCR);**HINCRBY 重测=现完全原子**(DynamoDB `ADD`,32 并发不丢,推翻早期「丢 87%」老版数);刻画既定分歧(§4.2):并发同成员 SADD → SCARD(cnt) 高于真实基数(存储 SET 仍对)、并发 list RMW → LLEN vs 实际元素背离。净结论:**存储内容并发下正确,O(1) 计数 cnt 是近似的** |
+| redimo **v3.1.0** / redimos **v1.40.0** | **🔑 cnt 计数漂移根治——AC 维度里唯一「可完全修 + 有真实影响」的项收口**。根因:`SADD`/`SREM` 从**写前 BatchGetItem 存在性快照**推「新增/删除数」(redimos 据此对 `meta.cnt` 做原子 `ADD`),并发**同元素**下多连接各读陈旧快照、各记一次 → `SCARD` 高于(SADD)/低于(SREM)真值;存储内容一直正确,仅计数漂移。修:**每个单元素计数写改条件写**——SADD=`PutItem attribute_not_exists`、SREM/HDEL/ZREM=`DeleteItem attribute_exists`,DynamoDB 原子+串行判定,恰一个赢(其余 `ConditionalCheckFailed`);HSET/ZADD 早已用 `ReturnValue ALL_OLD` 精确故不动。`*STORE` 走新 `saddUncounted` 保留批量写快路;删掉旧 `membersPresent` 快照。**为何用条件写而非 ALL_OLD 删**:条件判定在真 DynamoDB 与 DynamoDB Local 同分区高争用(#meta 计数器)下都原子,而 ALL_OLD 在本地模拟器会被 race(实测 48 并发同成员 SREM 有 12 个各报删一次)。on-disk 项形态不变、无迁移。**实测 48 并发同成员 SADD/SREM/HDEL/ZADD/ZREM 均 winners=1、SCARD/HLEN/ZCARD=1**,redimo 全测 + redimos 全差分(docker)全绿 |
 
 ---
 
@@ -129,9 +130,9 @@ Redis 单线程串行、每命令原子；redimos 把命令映射为多次 Dynam
 | # | 分歧 | redimos 行为 | 判据 |
 |---|---|---|---|
 | ❌ | **多键/多步写非原子** | `S*STORE`/`Z*STORE`/`SMOVE`/`RPOPLPUSH` 的 dest 清空-重填非事务；中间态可见 | DynamoDB 事务上限 **100 项 / 4MB**,而集合可含百万成员 → 大结果集本质无法单事务原子（分片即跨片非原子）。平台天花板 |
-| ❌ | **RMW 列表非原子** | `LSET`/`LTRIM`/`LREM` 读-改-写整表、无版本守卫；并发 RPUSH 交错时 **LLEN(meta.cnt) 与实际元素背离**（实测 24 并发 LLEN=5 vs LRANGE=90）；列表结构仍有效、不腐坏 | 同上，需 per-incarnation epoch 条件写重试；架构改，不修 |
+| ❌ | **RMW 列表非原子** | `LSET`/`LTRIM`/`LREM` 读-改-写整表、无版本守卫；并发 RPUSH 交错时 **LLEN(meta.cnt) 与实际元素背离**（实测 24 并发 LLEN=5 vs LRANGE=90）；列表结构仍有效、不腐坏。**cnt 计数修复后,这是唯一残留的计数分歧**（集合/哈希/zset 的 SCARD/HLEN/ZCARD 已精确,仅列表 LLEN 在整表 RMW 下仍会背离） | 需 per-incarnation epoch 条件写重试才能根治（整表原子重写又撞 100 项事务上限）；架构改，不修 |
 | ❌ | **DEL+重建单键寄存器非线性化** | 顺序/并发 `DEL k; SET k v; GET k` 可返回 nil（string 分体存 + SET 非快照双读）；Porcupine 实测确认不可线性化、且不保证不丢写 | 彻底修需 per-incarnation epoch fence（v1.30 试过事务 fence 反而令并发 SET 撞 `TransactionConflictException`,已 revert）。架构改，不修 |
-| ⚙️ | **计数近似（cnt 漂移）** | `SCARD`/`HLEN`/`ZCARD`/`LLEN` 读 `meta.cnt`（无条件 `ADD` 维护）；并发**同元素** SADD 或 RMW 下 **cnt 可高于真实基数**（实测 48 并发同成员 SADD→SCARD=27、真实 1）；:1/:0 返回同样超报；存储的 SET 仍正确 | **唯一可完全修的项**：把 SADD/HSET/ZADD 的 cnt 自增改成「成员项不存在才 +1」的条件写（贵一点）。价值真实但未定 |
+| ✅ | **计数漂移（cnt）已根治（redimo v3.1.0 / redimos v1.40.0）** | 曾:`SADD`/`SREM` 用**写前 BatchGetItem 快照**定新增/删除数,并发**同元素**下多连接各读到陈旧快照、各记一次 → `SCARD` 高于（SADD）或低于（SREM）真值（实测 48 并发同成员 SADD→SCARD=27、SREM→整键被误删）。现:**每个单元素计数写改条件写**——SADD=`attribute_not_exists` 建、SREM/HDEL/ZREM=`attribute_exists` 删,DynamoDB 原子+串行,恰一个赢（其余 `ConditionalCheckFailed`）;HSET/ZADD 早已用 `ReturnValue ALL_OLD` 精确。**实测 48 并发同成员 SADD/SREM/HDEL/ZADD/ZREM 均 winners=1、SCARD/HLEN/ZCARD=1** | 已修 |
 | ✅ | **已原子/已改善（2026-07-06 在 redimo/v3 重测确认）** | INCR/DECR（SETCAS 重试，计数==已确认）、**HINCRBY/HINCRBYFLOAT 现完全原子**（DynamoDB `ADD`，32 并发不丢——推翻早期「丢 87%」的老版实测）、SET NX/SETNX（条件 meta 占位，恰一个赢）、不同成员并发 SADD/HSET/RPUSH 计数精确 | — |
 
 ### 4.3 SCAN 游标设计
@@ -157,9 +158,9 @@ Redis 单线程串行、每命令原子；redimos 把命令映射为多次 Dynam
 
 ## 5. 并发原子性
 
-> **权威版见 §4.2**（2026-07-06 在 redimo/v3 上以 AC 维度重测,修正了本节早期结论:**HINCRBY 现完全原子**、**cnt 计数近似**已精确刻画）。本节保留 SET NX 收口与事务上限的背景叙述。
+> **权威版见 §4.2**（2026-07-06 在 redimo/v3 上以 AC 维度重测并修:**HINCRBY 现完全原子**、**cnt 计数漂移已根治**（redimo v3.1.0 把 SADD/SREM/HDEL/ZREM 的计数改条件写））。本节保留 SET NX 收口与事务上限的背景叙述。
 
-Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多次 DynamoDB 调用；能用单项/原生原子操作表达的已原子，需"多 item 一致"的则非原子。**净结论:存储内容（SMEMBERS/LRANGE/HGETALL）在并发下正确,但 O(1) 计数 SCARD/HLEN/ZCARD/LLEN（读 `meta.cnt`）在并发同元素/RMW 下会高于真值。**
+Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多次 DynamoDB 调用；能用单项/原生原子操作表达的已原子，需"多 item 一致"的则非原子。**净结论:存储内容在并发下正确;O(1) 计数 SCARD/HLEN/ZCARD 现也精确（redimo v3.1.0 每个单元素计数写用条件写,恰一个赢）,仅 LLEN 在列表整表 RMW（LTRIM/LSET/LREM）下仍会与实际元素背离（§4.2）。**
 
 | 类别 | 命令 | 是否等同 Redis 3.2 |
 |---|---|---|
@@ -169,7 +170,8 @@ Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多
 | 不同成员计数 | SADD/ZADD/HSET distinct | ✅ 稳态计数正确 |
 | **NX 条件写** | SET NX / SETNX | ✅ **原子（v1.9.0 起）**：单条条件 meta 写占位，并发只有一个"赢" |
 | **多步复合写** | S\*STORE / Z\*STORE / SMOVE / RPOPLPUSH 中间态 | ❌ 非原子（dest 清空-重填非事务） |
-| **部分写可见性** | SCARD/ZCARD/LLEN vs 实际成员 | ❌ 并发读可见半写中间态 |
+| **计数 cnt** | SCARD / HLEN / ZCARD（集合/哈希/zset） | ✅ **精确（redimo v3.1.0 条件写,并发同元素恰一个赢）** |
+| 列表计数 | LLEN vs 实际元素（并发整表 RMW） | ❌ 背离（RMW 无版本守卫，非计数写问题） |
 | 删除竞态 | delete-on-empty、DEL+重建 | ❌ 非原子（Load→DeleteMeta + 异步回收） |
 
 **SET NX / SETNX（v1.9.0 已收口）**：改用 redimo v2.0.2 的 `CreateTypeIfAbsent` —— 一条条件 `UpdateItem`（`attribute_not_exists(#t) OR #exp <= :now`）原子占住 meta 项，把"存在性判断 + 建类型"并成一步，消除了原先 `keyLive` 读 → 写之间的 TOCTOU 窗口。**实测**：30 轮 × 50 并发 SETNX 打同一新鲜键 → 每轮恰好一个 `:1`（与真 Redis 3.2 一致）；新鲜/同类型/异类型/过期键 21 项差分逐字节一致。残留仅一个崩溃窗口（占位成功后、写 value 前进程死掉 → 一个"活着的空串键"），非并发正确性问题,且与所有 redimos 写共用惰性回收兜底。
@@ -180,17 +182,17 @@ Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多
 
 ## 6. 决策记录（2026-07-06 平台期评估）
 
-命令语义（A–P）、线级协议（Q）、并发（AC）、被拒命令（S）四层维度均已覆盖并对真 `redis:3.2` 全绿——**测试维度层面已到「兼容性地板」**。剩下的都是**有界的「改架构关分歧」项目,不是新维度**;继续加差分用例=递减收益 / 重复确认既定地板。各项决策:
+命令语义（A–P）、线级协议（Q）、并发（AC）、被拒命令（S）四层维度均已覆盖并对真 `redis:3.2` 全绿——**测试维度层面已到「兼容性地板」**。**曾经唯一「可完全修 + 有真实影响」的 cnt 计数漂移已修复**（redimo v3.1.0）;**剩下的四项全部是「接受不修」的有界改架构项目**,继续加差分用例=递减收益 / 重复确认既定地板。各项决策:
 
 | 项 | 关掉的分歧 | 决策 | 理由 |
 |---|---|---|---|
-| **cnt 条件自增** | §4.2 计数近似（SCARD/HLEN 并发高计） | ⚙️ **待定** | 四项里**唯一可完全修 + 有真实可观测影响**的:把 SADD/HSET/ZADD 的 cnt 自增改条件写 |
+| **cnt 条件写** | §4.2 计数漂移（SCARD/HLEN/ZCARD 并发同元素偏差） | ✅ **已修复（redimo v3.1.0 / redimos v1.40.0）** | 四项里唯一可完全修 + 有真实可观测影响的。已把 SADD/SREM/HDEL/ZREM 的计数从写前快照改条件写（`attribute_not_exists`/`attribute_exists`,恰一个赢）;实测 48 并发同元素 winners=1 |
 | 毫秒 TTL | §4.1 TTL 秒精度 | ❌ **接受不修** | 成本太高（存毫秒 + 脱离 DynamoDB 原生 TTL） |
-| per-incarnation epoch | §4.2 多键/RMW/DEL+重建非线性化 | ❌ **接受不修** | 成本太高（加世代号 + 全 RMW/多键改条件写重试） |
+| per-incarnation epoch | §4.2 多键/RMW/DEL+重建非线性化（含列表 LLEN 背离） | ❌ **接受不修** | 成本太高（加世代号 + 全 RMW/多键改条件写重试;整表原子重写又撞 100 项事务上限） |
 | big.Float 分数 | §4.1 float64 精度 | ❌ **接受不修** | 半修（只关精度不关范围）、低价值（第 17 位、差分已 `eqFloatClose` 容忍） |
 | redcon 长度上界 | §4.4 超大帧 DoS | ❌ **接受不修** | 成本太高（需 fork/换 redcon） |
 
-**已完成的历史项**（不再是待办）:SET NX/SETNX 原子化（v1.9.0）、HINCRBY 原子化（DynamoDB `ADD`,2026-07 重测确认）、幻影空成员根治（redimo v3.0.0 编码分离,见 §2）、GEO 字节兼容（v1.8.0,仅余可选的 STORE/STOREDIST）、多数 arity 文本已按 oracle 对齐、ZADD NX/XX/CH/INCR 四标志（v1.32.0）、ZRANGEBYSCORE/ZREVRANGEBYSCORE `LIMIT`（v1.36.0）。
+**已完成的历史项**（不再是待办）:**cnt 计数漂移根治（redimo v3.1.0 条件写,见上）**、SET NX/SETNX 原子化（v1.9.0）、HINCRBY 原子化（DynamoDB `ADD`,2026-07 重测确认）、幻影空成员根治（redimo v3.0.0 编码分离,见 §2）、GEO 字节兼容（v1.8.0,仅余可选的 STORE/STOREDIST）、多数 arity 文本已按 oracle 对齐、ZADD NX/XX/CH/INCR 四标志（v1.32.0）、ZRANGEBYSCORE/ZREVRANGEBYSCORE `LIMIT`（v1.36.0）。
 
 ---
 
