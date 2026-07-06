@@ -125,6 +125,11 @@ func (t *throttleStore) EnsureType(ctx context.Context, pk, expected string, cnt
 	return newCount, t.obs(err)
 }
 
+func (t *throttleStore) EnsureTypeExpiring(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (int64, bool, error) {
+	newCount, tookOver, err := t.inner.EnsureTypeExpiring(ctx, pk, expected, cntDelta, nowEpoch)
+	return newCount, tookOver, t.obs(err)
+}
+
 func (t *throttleStore) CreateTypeIfAbsent(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
 	created, err := t.inner.CreateTypeIfAbsent(ctx, pk, expected, cntDelta, nowEpoch)
 	return created, t.obs(err)

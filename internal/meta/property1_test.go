@@ -68,6 +68,11 @@ func newProp1Store() *prop1Store {
 // EnsureType enforces the conditional-write contract. On a type conflict it
 // returns storage.ErrWrongType before touching any state, so the key's type and
 // count are left exactly as they were.
+func (s *prop1Store) EnsureTypeExpiring(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (int64, bool, error) {
+	c, err := s.EnsureType(ctx, pk, expected, cntDelta)
+	return c, false, err
+}
+
 func (s *prop1Store) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
 	e := s.items[pk]
 	if e == nil || !e.exists {

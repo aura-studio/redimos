@@ -66,6 +66,11 @@ func newFakeStringStore() *fakeStringStore {
 	}
 }
 
+func (s *fakeStringStore) EnsureTypeExpiring(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (int64, bool, error) {
+	c, err := s.EnsureType(ctx, pk, expected, cntDelta)
+	return c, false, err
+}
+
 func (s *fakeStringStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
 	m := s.metas[pk]
 	if s.live[pk] && m.Type != expected {

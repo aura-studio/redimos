@@ -47,6 +47,9 @@ var _ storage.Store = prop2Store{}
 func (prop2Store) EnsureType(context.Context, string, string, int64) (int64, error) {
 	return 0, nil
 }
+func (prop2Store) EnsureTypeExpiring(context.Context, string, string, int64, int64) (int64, bool, error) {
+	return 0, false, nil
+}
 func (prop2Store) DeleteMetaIfEmpty(context.Context, string) (bool, error) { return true, nil }
 
 func (s prop2Store) CreateTypeIfAbsent(_ context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {

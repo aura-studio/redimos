@@ -146,6 +146,17 @@ type Store interface {
 	// (instead of a second racy Load) to decide deletion — see DeleteMetaIfEmpty.
 	EnsureType(ctx context.Context, pk, expected string, cntDelta int64) (newCount int64, err error)
 
+	// EnsureTypeExpiring is EnsureType with Redis' expire-if-needed semantics: a key that
+	// is only logically EXPIRED (meta.exp <= nowEpoch) is treated as absent, so a write of
+	// any type may take it over (create fresh, reset count, clear expiry) — matching Redis,
+	// where every command evaluates expiry first. It fixes the two cases plain EnsureType
+	// gets wrong on an expired key: a different-type expired key (EnsureType replies
+	// WRONGTYPE) and a SAME-type expired key (EnsureType succeeds but leaves the key
+	// logically expired, so the write is swallowed). tookOverExpired is true iff an expired
+	// key was reclaimed — the caller MUST then DeleteMembers(pk) to reap its now-hidden stale
+	// member items. A live wrong-type key still returns ErrWrongType.
+	EnsureTypeExpiring(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (newCount int64, tookOverExpired bool, err error)
+
 	// CreateTypeIfAbsent atomically establishes the meta item for pk with the given
 	// type ONLY IF the key is logically absent — no meta item, or a meta item that
 	// is already expired relative to nowEpoch. It is the concurrency-safe gate for

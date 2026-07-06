@@ -61,20 +61,28 @@ func TestFixSMoveSameKey(t *testing.T) {
 func TestFixExpiredKeyTypeTakeover(t *testing.T) {
 	d := newDiffer(t)
 
-	ks := d.k("exp-str")
+	ks := d.k("exp-str") // wrong-type takeover: expired STRING, then SADD
 	d.eq("SET str EX 1", bs("SET"), ks, bs("v"), bs("EX"), bs("1"))
-	kz := d.k("exp-set")
+	kz := d.k("exp-set") // wrong-type takeover: expired SET, then INCR
 	d.eq("SADD then EXPIRE 1", bs("SADD"), kz, bs("x"))
 	d.eq("EXPIRE 1", bs("EXPIRE"), kz, bs("1"))
+	ksame := d.k("exp-same") // SAME-type takeover: expired SET, then SADD again
+	d.eq("SADD a b then EXPIRE 1", bs("SADD"), ksame, bs("a"), bs("b"))
+	d.eq("EXPIRE same 1", bs("EXPIRE"), ksame, bs("1"))
 
-	time.Sleep(1200 * time.Millisecond) // let both logically expire (no read/DEL in between)
+	time.Sleep(1200 * time.Millisecond) // let all logically expire (no read/DEL in between)
 
-	// SADD onto the expired STRING key -> :1 (creates a fresh set), not WRONGTYPE.
+	// Wrong-type: SADD onto expired STRING -> :1 (fresh set), not WRONGTYPE.
 	d.eq("SADD on expired string -> :1", bs("SADD"), ks, bs("m"))
-	d.eqSorted("SMEMBERS of taken-over key", bs("SMEMBERS"), ks)
-	// INCR onto the expired SET key -> :1 (creates a fresh string), not WRONGTYPE.
+	d.eqSorted("SMEMBERS of taken-over string key", bs("SMEMBERS"), ks)
+	// Wrong-type: INCR onto expired SET -> :1 (fresh string), not WRONGTYPE.
 	d.eq("INCR on expired set -> :1", bs("INCR"), kz)
-	d.eq("GET the taken-over string", bs("GET"), kz)
+	d.eq("GET the taken-over set key", bs("GET"), kz)
+	// SAME-type: SADD onto an expired SET must start a FRESH set (stale a,b gone), not
+	// resurrect them or be swallowed. Redis: SCARD 1, SMEMBERS {c}.
+	d.eq("SADD c on expired same-type set -> :1", bs("SADD"), ksame, bs("c"))
+	d.eq("SCARD of fresh same-type set -> 1", bs("SCARD"), ksame)
+	d.eqSorted("SMEMBERS fresh (only c, stale a/b reaped)", bs("SMEMBERS"), ksame)
 
 	t.Logf("compared %d expired-key-takeover replies vs Redis 3.2", d.n)
 }

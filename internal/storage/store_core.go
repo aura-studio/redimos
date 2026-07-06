@@ -61,6 +61,15 @@ func (s *redimoStore) EnsureType(ctx context.Context, pk, expected string, cntDe
 	return newCount, err
 }
 
+func (s *redimoStore) EnsureTypeExpiring(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (int64, bool, error) {
+	newCount, tookOver, err := s.client.WithContext(ctx).EnsureTypeExpiring(pk, redimo.KeyType(expected), cntDelta, nowEpoch)
+	if errors.Is(err, redimo.ErrWrongType) {
+		return 0, false, ErrWrongType
+	}
+
+	return newCount, tookOver, err
+}
+
 func (s *redimoStore) CreateTypeIfAbsent(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (bool, error) {
 	// The single conditional meta write claims a logically-absent (or expired) key
 	// atomically; created=false means the key is live, which is not an error for

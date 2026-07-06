@@ -45,6 +45,11 @@ type ensureCall struct {
 	cntDelta int64
 }
 
+func (f *fakeStore) EnsureTypeExpiring(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (int64, bool, error) {
+	c, err := f.EnsureType(ctx, pk, expected, cntDelta)
+	return c, false, err
+}
+
 func (f *fakeStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
 	f.ensureCalls = append(f.ensureCalls, ensureCall{pk: pk, expected: expected, cntDelta: cntDelta})
 	return f.ensureCount, f.ensureErr

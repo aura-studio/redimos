@@ -86,6 +86,11 @@ func (s *lazyStore) memberCount(pk string) int {
 	return s.members[pk]
 }
 
+func (s *lazyStore) EnsureTypeExpiring(ctx context.Context, pk, expected string, cntDelta, nowEpoch int64) (int64, bool, error) {
+	c, err := s.EnsureType(ctx, pk, expected, cntDelta)
+	return c, false, err
+}
+
 func (s *lazyStore) EnsureType(_ context.Context, pk, expected string, cntDelta int64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

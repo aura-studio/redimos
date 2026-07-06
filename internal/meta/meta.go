@@ -107,6 +107,19 @@ func (m *MetaStore) EnsureType(ctx context.Context, pk string, expected KeyType,
 	return newCount, err
 }
 
+// EnsureTypeExpiring is EnsureType with Redis' expire-if-needed semantics: an expired key
+// (of any type) is treated as absent and taken over. tookOverExpired=true means an expired
+// key was reclaimed and the caller must DeleteMembers(pk) to reap its stale member items.
+// See storage.Store.EnsureTypeExpiring.
+func (m *MetaStore) EnsureTypeExpiring(ctx context.Context, pk string, expected KeyType, cntDelta, nowEpoch int64) (newCount int64, tookOverExpired bool, err error) {
+	newCount, tookOverExpired, err = m.store.EnsureTypeExpiring(ctx, pk, string(expected), cntDelta, nowEpoch)
+	if errors.Is(err, storage.ErrWrongType) {
+		return 0, false, ErrWrongType
+	}
+
+	return newCount, tookOverExpired, err
+}
+
 // CreateTypeIfAbsent atomically claims a logically-absent key (no meta item, or one
 // already expired relative to nowEpoch) with the given type, in a single conditional
 // meta write. It is the concurrency-safe gate for SETNX / SET NX: created is true
