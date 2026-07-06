@@ -11,19 +11,31 @@ import (
 
 // --- EXPIRE with an overflowing TTL must not delete the key (P3-14) ----------
 
-func TestExpireHugeTTLDoesNotDeleteKey(t *testing.T) {
+func TestExpireHugeTTLOverflowDeletes(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
 
 	if got := sendRead(t, conn, r, "SET k v"); got != "+OK" {
 		t.Fatalf("SET = %q", got)
 	}
-	// now(1000) + MaxInt64 overflows int64; the key must get a far-future TTL, not be
-	// deleted (Redis stores the far-future expiry and never deletes on a large TTL).
+	// An EXPIRE so large that seconds*1000 overflows the millisecond domain matches Redis'
+	// observable behaviour: Redis wraps to a past deadline and immediately deletes the key
+	// (EXPIRE k 9223372036854775807 leaves TTL -2). The command still replies :1 (applied).
 	if got := sendRead(t, conn, r, "EXPIRE k 9223372036854775807"); got != ":1" {
-		t.Fatalf("EXPIRE huge = %q, want :1", got)
+		t.Fatalf("EXPIRE overflow = %q, want :1", got)
 	}
-	if got := sendRead(t, conn, r, "EXISTS k"); got != ":1" {
-		t.Fatalf("EXISTS after huge EXPIRE = %q, want :1 (key must survive)", got)
+	if got := sendRead(t, conn, r, "EXISTS k"); got != ":0" {
+		t.Fatalf("EXISTS after overflow EXPIRE = %q, want :0 (deleted, matching Redis 3.2)", got)
+	}
+
+	// A large TTL that does NOT overflow the ms domain survives with a far-future expiry.
+	if got := sendRead(t, conn, r, "SET k2 v"); got != "+OK" {
+		t.Fatalf("SET k2 = %q", got)
+	}
+	if got := sendRead(t, conn, r, "EXPIRE k2 1000000000000"); got != ":1" { // 1e12 s: no ms overflow
+		t.Fatalf("EXPIRE large-non-overflow = %q, want :1", got)
+	}
+	if got := sendRead(t, conn, r, "EXISTS k2"); got != ":1" {
+		t.Fatalf("EXISTS after large-non-overflow EXPIRE = %q, want :1 (survives)", got)
 	}
 }
 

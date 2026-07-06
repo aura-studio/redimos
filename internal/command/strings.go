@@ -736,3 +736,11 @@ func rangeBounds(strlen, start, end int64) (lo, hi int) {
 
 	return int(start), int(end + 1)
 }
+
+// NOTE (accepted ultra-edge, §4): Redis 3.2's getrange has an inconsistent result for some
+// doubly-out-of-range NEGATIVE index pairs — e.g. GETRANGE "hello" -100 -200 replies "" while
+// 0 -200 (and even 0 <MinInt64>) replies "h", despite both clamping start/end to 0. That
+// behaviour is not cleanly expressible (it depends on the pre-clamp start sign in a way its C
+// code arrives at by accident), so redimos keeps the straightforward clamp-then-compare above
+// (which matches Redis for every in-range and start>=0 case) and diverges only on a
+// both-indices-wildly-negative GETRANGE — a documented, unfixed corner.

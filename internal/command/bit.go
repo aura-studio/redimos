@@ -191,7 +191,16 @@ func (r *Router) handleBitPos(ctx context.Context, c *server.Conn, args [][]byte
 		return
 	}
 	if !found {
-		cur = nil
+		// Redis' bitposCommand replies for a MISSING key (a NULL object) at the very top:
+		// bit==0 -> 0 (an infinite run of zero bytes), bit==1 -> -1 — IGNORING any start/end.
+		// (An EXISTING empty string is different: it falls through to the empty-range path
+		// below and reports -1.)
+		if bit == 0 {
+			w.Int(0)
+		} else {
+			w.Int(-1)
+		}
+		return
 	}
 
 	endGiven := len(args) == 5
@@ -215,12 +224,8 @@ func (r *Router) handleBitPos(ctx context.Context, c *server.Conn, args [][]byte
 	}
 
 	if len(cur) == 0 || lo > hi {
-		// Empty range: a clear-bit search with no explicit end reports position 0
-		// on a truly empty string, otherwise -1.
-		if bit == 0 && !endGiven && len(cur) == 0 {
-			w.Int(0)
-			return
-		}
+		// The key EXISTS (a missing key returned above): an empty value (STRLEN 0) or an
+		// empty resolved range has no bytes to search, so — like Redis — report -1.
 		w.Int(-1)
 		return
 	}

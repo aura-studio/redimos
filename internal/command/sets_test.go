@@ -197,7 +197,7 @@ func TestSPopWithCountEmptyKeyIsEmptyArray(t *testing.T) {
 func TestSPopNegativeCount(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
 	sendRead(t, conn, r, "SADD s a")
-	want := "-ERR value is out of range, must be positive"
+	want := "-ERR index out of range" // Redis 3.2 wording (5.0+ says "value is out of range, must be positive")
 	if got := sendRead(t, conn, r, "SPOP s -1"); got != want {
 		t.Errorf("SPOP s -1 = %q, want %q", got, want)
 	}

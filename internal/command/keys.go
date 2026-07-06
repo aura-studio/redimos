@@ -318,25 +318,7 @@ func (r *Router) applyExpire(ctx context.Context, c *server.Conn, args [][]byte,
 // expiry to now + seconds. A negative/zero seconds resolves to a past expiry and
 // deletes a live key (see applyExpire).
 func (r *Router) handleExpire(ctx context.Context, c *server.Conn, args [][]byte) {
-	r.applyExpire(ctx, c, args, func(now, seconds int64) int64 { return addExpiryClamp(now, seconds) })
-}
-
-// addExpiryClamp returns now + delta, saturating instead of wrapping on int64
-// overflow. A very large positive TTL (e.g. EXPIRE k 9223372036854775807) would
-// otherwise overflow to a negative epoch that applyExpire reads as a PAST expiry and
-// DELETES the key; clamping to math.MaxInt64 yields a far-future expiry that never
-// fires, matching Redis (which stores the far-future time and never deletes on a
-// large positive TTL). A negative overflow saturates to math.MinInt64, which still
-// resolves to a past expiry.
-func addExpiryClamp(now, delta int64) int64 {
-	s := now + delta
-	if delta > 0 && s < now {
-		return math.MaxInt64
-	}
-	if delta < 0 && s > now {
-		return math.MinInt64
-	}
-	return s
+	r.applyExpire(ctx, c, args, secExpiryEpoch)
 }
 
 // msDeadlineToSec converts an absolute millisecond expiry deadline to whole epoch
@@ -358,15 +340,16 @@ func msDeadlineToSec(now, deadlineMs int64) int64 {
 	return sec
 }
 
-// secExpiryEpoch resolves a POSITIVE relative expiry in SECONDS (SET EX / SETEX) to an
-// absolute epoch in seconds. Redis carries expiry in the millisecond domain, so an EX so
+// secExpiryEpoch resolves a relative expiry in SECONDS (EXPIRE / SET EX / SETEX) to an
+// absolute epoch in seconds. Redis carries expiry in the millisecond domain, so a value so
 // large that now*1000 + seconds*1000 overflows int64 is UB in Redis (it wraps to an
-// arbitrary — sometimes past, sometimes bogus-future — deadline). redimos does not
-// replicate that C undefined behaviour (cf. the SELECT/DECRBY int64-min cases in §4.6):
-// an overflowing expiry deterministically resolves to `now`, so the key is created but
-// immediately expired (TTL -2, GET nil) instead of overflowing `now+n` into a bogus
-// permanent or negative-TTL key. The EXPIRE family already saturates via addExpiryClamp;
-// this keeps SET EX / SETEX consistent with it.
+// arbitrary deadline; empirically Redis DELETES such a key — EXPIRE k 9223372036854775807
+// leaves TTL -2). redimos does not replicate that C undefined behaviour (cf. the
+// SELECT/DECRBY int64-min cases in §4.6): an overflowing expiry deterministically resolves
+// to `now`, so the key is immediately expired (deleted / TTL -2, GET nil) instead of
+// overflowing now+n into a bogus permanent or negative-TTL key. A non-overflowing value —
+// including a negative or zero one — resolves to now+n, which applyExpire deletes when it is
+// <= now (EXPIRE 0 / a negative TTL delete the key, matching Redis).
 func secExpiryEpoch(now, n int64) int64 {
 	if n > math.MaxInt64/1000-now { // now*1000 + n*1000 would overflow the ms domain
 		return now
@@ -374,11 +357,11 @@ func secExpiryEpoch(now, n int64) int64 {
 	return now + n
 }
 
-// msExpiryEpoch resolves a POSITIVE relative expiry in MILLISECONDS (SET PX / PSETEX) to
-// an absolute epoch in seconds. Like secExpiryEpoch it resolves an ms-domain overflow to
-// an immediately-expired `now` rather than replicating Redis' UB wrap; otherwise it
-// truncates to seconds via msDeadlineToSec (which also lifts a positive sub-second TTL to
-// now+1 so it does not instant-delete the key).
+// msExpiryEpoch resolves a relative expiry in MILLISECONDS (PEXPIRE / SET PX / PSETEX) to an
+// absolute epoch in seconds. Like secExpiryEpoch it resolves an ms-domain overflow to an
+// immediately-expired `now` rather than replicating Redis' UB wrap; otherwise it truncates
+// to seconds via msDeadlineToSec (which also lifts a positive sub-second TTL to now+1 so it
+// does not instant-delete the key). Negative ms resolve to a past second and delete the key.
 func msExpiryEpoch(now, n int64) int64 {
 	if n > math.MaxInt64-now*1000 { // now*1000 + n would overflow
 		return now
@@ -386,19 +369,26 @@ func msExpiryEpoch(now, n int64) int64 {
 	return msDeadlineToSec(now, now*1000+n)
 }
 
-// handleExpireAt implements EXPIREAT key timestamp (requirement 10.4): set the
-// key's expiry to the absolute epoch-seconds timestamp. A timestamp <= now deletes
-// a live key (see applyExpire).
+// handleExpireAt implements EXPIREAT key timestamp (requirement 10.4): set the key's expiry
+// to the absolute epoch-seconds timestamp. A timestamp <= now deletes a live key (see
+// applyExpire). A timestamp so large that ts*1000 overflows the millisecond domain is
+// deleted immediately, matching Redis (EXPIREAT k 9223372036854775807 leaves TTL -2) rather
+// than storing a bogus far-future expiry.
 func (r *Router) handleExpireAt(ctx context.Context, c *server.Conn, args [][]byte) {
-	r.applyExpire(ctx, c, args, func(_, ts int64) int64 { return ts })
+	r.applyExpire(ctx, c, args, func(now, ts int64) int64 {
+		if ts > math.MaxInt64/1000 {
+			return now
+		}
+		return ts
+	})
 }
 
-// handlePExpire implements PEXPIRE key milliseconds (requirements 10.4, 10.5): set
-// the key's expiry to now + milliseconds, truncated to whole seconds (Pika v3.2.2
-// has no millisecond precision). The truncation aligns to the absolute epoch so it
-// matches the SET PX / PSETEX computation.
+// handlePExpire implements PEXPIRE key milliseconds (requirements 10.4, 10.5): set the
+// key's expiry to now + milliseconds, truncated to whole seconds (Pika v3.2.2 has no
+// millisecond precision) — sharing the SET PX / PSETEX computation (msExpiryEpoch), so a
+// positive sub-second PEXPIRE keeps the key alive and an overflowing one deletes it.
 func (r *Router) handlePExpire(ctx context.Context, c *server.Conn, args [][]byte) {
-	r.applyExpire(ctx, c, args, func(now, ms int64) int64 { return msDeadlineToSec(now, addExpiryClamp(now*1000, ms)) })
+	r.applyExpire(ctx, c, args, msExpiryEpoch)
 }
 
 // handlePExpireAt implements PEXPIREAT key ms-timestamp (requirements 10.4, 10.5):

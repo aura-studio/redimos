@@ -306,7 +306,9 @@ func (r *Router) handleSPop(ctx context.Context, c *server.Conn, args [][]byte) 
 			return
 		}
 		if n < 0 {
-			w.Error("ERR value is out of range, must be positive")
+			// Redis 3.2's spopWithCountCommand replies "index out of range" for a negative
+			// count (the "value is out of range, must be positive" wording is Redis 5.0+).
+			w.Error("ERR index out of range")
 			return
 		}
 		count = int(n)

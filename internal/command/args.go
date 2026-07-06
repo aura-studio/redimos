@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/aura-studio/redimos/v2/internal/resp"
 	"github.com/aura-studio/redimos/v2/internal/server"
@@ -129,11 +130,48 @@ func ParseInt(arg []byte) (int64, error) {
 // parseScore / parseScoreBound, which layer their rules on top of this. On violation it
 // returns ErrNotFloat. Requirement 6.1.
 func ParseFloat(arg []byte) (float64, error) {
-	f, err := strconv.ParseFloat(string(arg), 64)
-	if err != nil || math.IsNaN(f) {
+	s := string(arg)
+	// Redis' getDoubleFromObject is strtod-based, and strtod does NOT accept Go's
+	// underscore digit separators ("1_000"). Go's strconv.ParseFloat DOES, so reject any
+	// '_' up front to avoid accepting a value Redis would reject as "not a valid float".
+	if strings.IndexByte(s, '_') >= 0 {
+		return 0, ErrNotFloat
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		// strtod also parses a hex integer constant WITHOUT the binary 'p' exponent that
+		// Go requires ("0x10" -> 16, "0x1f" -> 31), so redimos would otherwise reject hex
+		// numbers Redis accepts. Retry those with a zero exponent appended.
+		if hf, ok := parseHexNoExp(s); ok {
+			f = hf
+		} else {
+			return 0, ErrNotFloat
+		}
+	}
+	if math.IsNaN(f) {
 		return 0, ErrNotFloat
 	}
 	return f, nil
+}
+
+// parseHexNoExp accepts a C-strtod-style hex INTEGER constant that lacks the binary 'p'
+// exponent Go's ParseFloat requires (e.g. "0x1f", "-0x10") by appending "p0" and
+// re-parsing. It returns ok=false for anything that is not such a constant — including hex
+// values that already have an exponent or a fractional '.' — leaving ParseFloat's normal
+// rejection in place.
+func parseHexNoExp(s string) (float64, bool) {
+	body := s
+	if len(body) > 0 && (body[0] == '+' || body[0] == '-') {
+		body = body[1:]
+	}
+	if len(body) < 3 || body[0] != '0' || (body[1] != 'x' && body[1] != 'X') {
+		return 0, false
+	}
+	if strings.ContainsAny(body, "pP.") {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(s+"p0", 64)
+	return f, err == nil
 }
 
 // ParseFloatReply is the float analogue of ParseIntReply: on failure it writes the

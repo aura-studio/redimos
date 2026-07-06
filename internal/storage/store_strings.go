@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"strconv"
+	"strings"
 
 	redimo "github.com/aura-studio/redimo/v2"
 )
@@ -220,11 +221,44 @@ func parseStoredInt(b []byte) (int64, error) {
 // is rejected (strconv.ParseFloat enforces full consumption). On failure it
 // returns ErrNotFloat.
 func parseStoredFloat(b []byte) (float64, error) {
-	f, err := strconv.ParseFloat(string(b), 64)
-	if err != nil || math.IsNaN(f) {
+	s := string(b)
+	// Match Redis' strtod, not Go's strconv: reject Go-style underscore digit separators
+	// ("1_000") that strtod does not accept, and accept a hex integer constant without the
+	// binary 'p' exponent that strtod does ("0x10" -> 16). This must mirror the command-layer
+	// ParseFloat so a stored value and an increment argument are validated identically.
+	if strings.IndexByte(s, '_') >= 0 {
+		return 0, ErrNotFloat
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		if hf, ok := parseHexNoExpStored(s); ok {
+			f = hf
+		} else {
+			return 0, ErrNotFloat
+		}
+	}
+	if math.IsNaN(f) {
 		return 0, ErrNotFloat
 	}
 	return f, nil
+}
+
+// parseHexNoExpStored accepts a strtod-style hex INTEGER constant lacking the binary 'p'
+// exponent Go requires ("0x1f", "-0x10") by appending "p0" and re-parsing; ok=false for
+// anything else (already has an exponent or a fractional '.').
+func parseHexNoExpStored(s string) (float64, bool) {
+	body := s
+	if len(body) > 0 && (body[0] == '+' || body[0] == '-') {
+		body = body[1:]
+	}
+	if len(body) < 3 || body[0] != '0' || (body[1] != 'x' && body[1] != 'X') {
+		return 0, false
+	}
+	if strings.ContainsAny(body, "pP.") {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(s+"p0", 64)
+	return f, err == nil
 }
 
 // formatRedisFloat renders f the way Redis formats an INCRBYFLOAT reply: the

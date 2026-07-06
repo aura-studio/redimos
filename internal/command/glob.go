@@ -69,7 +69,14 @@ func stringMatchLen(pattern, str []byte) bool {
 					p--
 					break
 				}
-				if pattern[p] == '\\' && len(pattern)-p >= 2 {
+				if pattern[p] == '\\' {
+					if len(pattern)-p < 2 {
+						// Trailing bare backslash with no byte to escape: Redis'
+						// stringmatchlen does not register it as a class member, so end the
+						// class scan without matching (a fall-through to the literal branch
+						// would wrongly match a literal backslash for a pattern like "[a\").
+						break
+					}
 					p++
 					if pattern[p] == str[s] {
 						match = true
