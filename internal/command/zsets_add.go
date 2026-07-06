@@ -112,7 +112,7 @@ func (r *Router) zaddFastPath(ctx context.Context, c *server.Conn, w *resp.Write
 		r.writeStoreError(c, err)
 		return
 	}
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeZSet, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeZSet); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -186,7 +186,7 @@ func (r *Router) zaddFlagPath(ctx context.Context, c *server.Conn, w *resp.Write
 	}
 
 	if len(writeOrder) > 0 {
-		if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeZSet, 0); err != nil {
+		if err := r.ensureTypeExpiring(ctx, pk, meta.TypeZSet); err != nil {
 			r.writeStoreError(c, err)
 			return
 		}
@@ -238,7 +238,7 @@ func (r *Router) zaddIncr(ctx context.Context, c *server.Conn, w *resp.Writer, k
 			return
 		}
 	}
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeZSet, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeZSet); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

@@ -339,6 +339,53 @@ func addExpiryClamp(now, delta int64) int64 {
 	return s
 }
 
+// msDeadlineToSec converts an absolute millisecond expiry deadline to whole epoch
+// seconds. The proxy stores expiry at second precision (Pika v3.2.2 has no sub-second
+// TTL), so the deadline is truncated to seconds — BUT with one guard: a deadline that is
+// in the FUTURE yet less than a second away truncates back to the current second and
+// would be read as already-expired, so a positive sub-second TTL (PEXPIRE k 200, SET k v
+// PX 200, PSETEX k 200 v) would DELETE the key immediately. Redis instead keeps the key
+// alive for the requested ~200ms. To avoid that harmful instant/early expiry, a future
+// deadline that truncates to <= now is clamped up to now+1, so the key lives ~1s rather
+// than vanishing. A deadline already in the past is left truncated (<= now) so PEXPIREAT
+// with a past timestamp still deletes the key. This does not add millisecond precision;
+// it only removes the surprising sub-second instant-death within the second-precision model.
+func msDeadlineToSec(now, deadlineMs int64) int64 {
+	sec := deadlineMs / 1000
+	if deadlineMs > now*1000 && sec <= now {
+		return now + 1
+	}
+	return sec
+}
+
+// secExpiryEpoch resolves a POSITIVE relative expiry in SECONDS (SET EX / SETEX) to an
+// absolute epoch in seconds. Redis carries expiry in the millisecond domain, so an EX so
+// large that now*1000 + seconds*1000 overflows int64 is UB in Redis (it wraps to an
+// arbitrary — sometimes past, sometimes bogus-future — deadline). redimos does not
+// replicate that C undefined behaviour (cf. the SELECT/DECRBY int64-min cases in §4.6):
+// an overflowing expiry deterministically resolves to `now`, so the key is created but
+// immediately expired (TTL -2, GET nil) instead of overflowing `now+n` into a bogus
+// permanent or negative-TTL key. The EXPIRE family already saturates via addExpiryClamp;
+// this keeps SET EX / SETEX consistent with it.
+func secExpiryEpoch(now, n int64) int64 {
+	if n > math.MaxInt64/1000-now { // now*1000 + n*1000 would overflow the ms domain
+		return now
+	}
+	return now + n
+}
+
+// msExpiryEpoch resolves a POSITIVE relative expiry in MILLISECONDS (SET PX / PSETEX) to
+// an absolute epoch in seconds. Like secExpiryEpoch it resolves an ms-domain overflow to
+// an immediately-expired `now` rather than replicating Redis' UB wrap; otherwise it
+// truncates to seconds via msDeadlineToSec (which also lifts a positive sub-second TTL to
+// now+1 so it does not instant-delete the key).
+func msExpiryEpoch(now, n int64) int64 {
+	if n > math.MaxInt64-now*1000 { // now*1000 + n would overflow
+		return now
+	}
+	return msDeadlineToSec(now, now*1000+n)
+}
+
 // handleExpireAt implements EXPIREAT key timestamp (requirement 10.4): set the
 // key's expiry to the absolute epoch-seconds timestamp. A timestamp <= now deletes
 // a live key (see applyExpire).
@@ -351,14 +398,14 @@ func (r *Router) handleExpireAt(ctx context.Context, c *server.Conn, args [][]by
 // has no millisecond precision). The truncation aligns to the absolute epoch so it
 // matches the SET PX / PSETEX computation.
 func (r *Router) handlePExpire(ctx context.Context, c *server.Conn, args [][]byte) {
-	r.applyExpire(ctx, c, args, func(now, ms int64) int64 { return addExpiryClamp(now*1000, ms) / 1000 })
+	r.applyExpire(ctx, c, args, func(now, ms int64) int64 { return msDeadlineToSec(now, addExpiryClamp(now*1000, ms)) })
 }
 
 // handlePExpireAt implements PEXPIREAT key ms-timestamp (requirements 10.4, 10.5):
 // set the key's expiry to the absolute millisecond timestamp, truncated to whole
 // seconds. A resolved second <= now deletes a live key (see applyExpire).
 func (r *Router) handlePExpireAt(ctx context.Context, c *server.Conn, args [][]byte) {
-	r.applyExpire(ctx, c, args, func(_, msTS int64) int64 { return msTS / 1000 })
+	r.applyExpire(ctx, c, args, func(now, msTS int64) int64 { return msDeadlineToSec(now, msTS) })
 }
 
 // handleTTL implements TTL key (requirements 10.6, 10.11): reply the key's

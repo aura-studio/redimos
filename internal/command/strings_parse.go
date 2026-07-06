@@ -56,11 +56,13 @@ func parseSetOptions(opts [][]byte, now int64) (setOptions, string) {
 			}
 			o.expSet = true
 			if isMillis {
-				// Absolute expiry in epoch seconds, truncating sub-second
-				// precision (Pika v3.2.2 has no millisecond precision).
-				o.expEpoch = (now*1000 + n) / 1000
+				// Absolute expiry in epoch seconds. Sub-second precision is not
+				// stored (Pika v3.2.2 has none), but a positive sub-second PX must
+				// not instant-delete the key, and a huge PX must not overflow into a
+				// bogus permanent/negative-TTL key — msExpiryEpoch handles both.
+				o.expEpoch = msExpiryEpoch(now, n)
 			} else {
-				o.expEpoch = now + n
+				o.expEpoch = secExpiryEpoch(now, n)
 			}
 			i++ // consume the value argument.
 		default:

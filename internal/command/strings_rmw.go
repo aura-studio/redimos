@@ -168,7 +168,7 @@ func (r *Router) rmwString(ctx context.Context, pk string, compute func(base []b
 		// EnsureType creates/verifies the String type (rejecting a live non-String
 		// key with WRONGTYPE) before the value write, atomically re-checked each
 		// attempt so a concurrent type change is still caught.
-		if _, eerr := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); eerr != nil {
+		if eerr := r.ensureTypeExpiring(ctx, pk, meta.TypeString); eerr != nil {
 			return 0, eerr
 		}
 

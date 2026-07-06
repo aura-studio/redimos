@@ -195,6 +195,41 @@ func (r *Router) adjustCount(ctx context.Context, pk string, typ meta.KeyType, d
 	return nil
 }
 
+// ensureTypeExpiring is EnsureType(pk, expected, 0) with Redis' expire-if-needed
+// semantics folded in. A bare EnsureType rejects a key whose stored type differs from
+// `expected` with WRONGTYPE — but if that key is only LOGICALLY expired (meta.exp <= now)
+// and not yet reclaimed (native-TTL / lazy-delete is asynchronous), Redis treats it as
+// absent and lets the write create the new type. So on a WRONGTYPE this reloads the meta
+// and, when it is expired, reclaims the stale key (members + meta, like overwriteAnyType)
+// and retries the type-ensure once. A genuinely LIVE wrong-type key still returns
+// meta.ErrWrongType. The count is not touched here — callers apply the real delta via
+// adjustCount afterwards (this ensure step always passes cntDelta 0).
+func (r *Router) ensureTypeExpiring(ctx context.Context, pk string, expected meta.KeyType) error {
+	_, err := r.Storage.Meta.EnsureType(ctx, pk, expected, 0)
+	if !errors.Is(err, meta.ErrWrongType) {
+		return err
+	}
+
+	m, ok, lerr := r.Storage.Meta.Load(ctx, pk)
+	if lerr != nil {
+		return lerr
+	}
+	if !ok || !meta.IsExpired(m, r.now()) {
+		return meta.ErrWrongType // a live key of the wrong type — a real WRONGTYPE
+	}
+
+	// Logically expired: reclaim its members and drop its meta, then re-ensure the type,
+	// so the write proceeds as if the key never existed (Redis expire-if-needed).
+	if _, derr := r.Storage.Store.DeleteMembers(ctx, pk); derr != nil {
+		return derr
+	}
+	if _, derr := r.Storage.Meta.DeleteMeta(ctx, pk); derr != nil {
+		return derr
+	}
+	_, err = r.Storage.Meta.EnsureType(ctx, pk, expected, 0)
+	return err
+}
+
 // writeScanReply writes the two-element single-pk SCAN reply [cursor, [items...]]
 // shared by SSCAN and HSCAN. A nil items slice is normalized to a non-nil empty
 // slice so the inner array always encodes as "*0" (empty array), never the null

@@ -94,7 +94,7 @@ func (r *Router) ensureSetWritable(ctx context.Context, c *server.Conn, pk strin
 		r.writeStoreError(c, err)
 		return false
 	}
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeSet, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeSet); err != nil {
 		r.writeStoreError(c, err)
 		return false
 	}
@@ -788,7 +788,7 @@ func (r *Router) handleSetAlgebraStore(ctx context.Context, c *server.Conn, op s
 	}
 
 	// Create dest as a fresh Set and add the result members, maintaining cnt.
-	if _, err := r.Storage.Meta.EnsureType(ctx, destPK, meta.TypeSet, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, destPK, meta.TypeSet); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -846,6 +846,25 @@ func (r *Router) handleSMove(ctx context.Context, c *server.Conn, args [][]byte)
 		w.Int(0)
 		return
 	}
+	// Redis: when source and destination are the SAME key, SMOVE is a pure no-op that
+	// only reports whether the member is present (:1) or not (:0) — it never removes and
+	// recreates the key. Short-circuit here (after the source type check) so we don't run
+	// the SREM+SADD path below, which for a single-member set would transiently empty the
+	// key (delete-on-empty) and rebuild it, dropping its TTL. (t_set.c: `if (srcset ==
+	// dstset) { addReply(ismember ? cone : czero); return; }`.)
+	if srcPK == dstPK {
+		isMember, err := r.Storage.Store.SIsMember(ctx, srcPK, string(member))
+		if err != nil {
+			r.writeStoreError(c, err)
+			return
+		}
+		if isMember {
+			w.Int(1)
+		} else {
+			w.Int(0)
+		}
+		return
+	}
 	if _, _, dstWrong, err := r.setState(ctx, dstPK); err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -881,7 +900,7 @@ func (r *Router) handleSMove(ctx context.Context, c *server.Conn, args [][]byte)
 		return
 	}
 
-	if _, err := r.Storage.Meta.EnsureType(ctx, dstPK, meta.TypeSet, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, dstPK, meta.TypeSet); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

@@ -475,7 +475,7 @@ func (r *Router) handleRPopLPush(ctx context.Context, c *server.Conn, args [][]b
 	// Push onto the destination head, creating/type-checking it, then bump its
 	// length. EnsureType(delta 0) creates the meta + rejects a wrong type before
 	// the element write, matching the push write-path ordering.
-	if _, err := r.Storage.Meta.EnsureType(ctx, dstPK, meta.TypeList, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, dstPK, meta.TypeList); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

@@ -149,6 +149,20 @@ const errScoreNotFinite = "ERR score must be a finite number"
 // ZINCRBY). It rejects an unparseable float exactly as Redis does (errNotValidFloat)
 // and, unlike parseScore, also rejects a non-finite ±inf value with errScoreNotFinite
 // (see above). errText is "" on success.
+// dynamoNumberMaxMagnitude is the largest magnitude DynamoDB's Number type can hold
+// (its domain is ~1e-130 .. 9.9999…e+125, 38 significant digits, no inf/NaN). A score
+// whose magnitude exceeds this is a perfectly valid IEEE-754 double that Redis accepts
+// but redimos cannot persist as the item's numeric sort attribute.
+const dynamoNumberMaxMagnitude = 9.9999999999999999999999999999999999999e+125
+
+// errScoreOutOfRange is redimos' reply for a FINITE score whose magnitude exceeds the
+// DynamoDB Number domain (e.g. 1e130, 1e308). Redis stores these as ordinary doubles;
+// redimos cannot, so — like the ±inf case — it rejects them deterministically up front
+// rather than letting the write reach the backend, which returned a misleading "backend
+// error, retry later" AND, in a multi-member ZADD, left already-written members behind
+// without incrementing meta.cnt (a torn ZCARD/contents state). See doc §4.1.
+const errScoreOutOfRange = "ERR value is out of range"
+
 func storeScore(arg []byte) (score float64, errText string) {
 	f, ok := parseScore(arg)
 	if !ok {
@@ -156,6 +170,9 @@ func storeScore(arg []byte) (score float64, errText string) {
 	}
 	if math.IsInf(f, 0) {
 		return 0, errScoreNotFinite
+	}
+	if math.Abs(f) > dynamoNumberMaxMagnitude {
+		return 0, errScoreOutOfRange
 	}
 	return f, ""
 }

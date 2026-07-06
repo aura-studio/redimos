@@ -178,7 +178,7 @@ func (r *Router) handleZStore(ctx context.Context, c *server.Conn, args [][]byte
 	}
 
 	// Create dest as a fresh Sorted Set and add the result members, maintaining cnt.
-	if _, err := r.Storage.Meta.EnsureType(ctx, destPK, meta.TypeZSet, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, destPK, meta.TypeZSet); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

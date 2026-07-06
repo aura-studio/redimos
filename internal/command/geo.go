@@ -104,7 +104,7 @@ func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte
 		r.writeStoreError(c, err)
 		return
 	}
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeZSet, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeZSet); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -374,7 +374,13 @@ func (r *Router) geoRadiusReply(ctx context.Context, c *server.Conn, pk string, 
 		}
 	}
 
-	if o.sortAsc || o.sortDesc {
+	// Redis' georadiusGeneric forces ascending (by-distance) order whenever COUNT is
+	// given without an explicit ASC/DESC ("if (count != 0 && sort == SORT_NONE) sort =
+	// SORT_ASC;"), so `COUNT n` returns the NEAREST n. Without this, results are in
+	// geohash-score order (ZRangeByRank) and the truncation would keep an arbitrary n,
+	// not the closest n.
+	sortAsc := o.sortAsc || (o.count > 0 && !o.sortDesc)
+	if sortAsc || o.sortDesc {
 		sort.SliceStable(results, func(i, j int) bool {
 			if o.sortDesc {
 				return results[i].dist > results[j].dist

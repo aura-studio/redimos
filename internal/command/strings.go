@@ -191,7 +191,7 @@ func (r *Router) handleSet(ctx context.Context, c *server.Conn, args [][]byte) {
 		r.writeStoreError(c, err)
 		return
 	}
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -287,9 +287,9 @@ func (r *Router) setWithExpiry(ctx context.Context, c *server.Conn, key, val, ex
 	now := r.now()
 	var expEpoch int64
 	if isMillis {
-		expEpoch = (now*1000 + n) / 1000
+		expEpoch = msExpiryEpoch(now, n)
 	} else {
-		expEpoch = now + n
+		expEpoch = secExpiryEpoch(now, n)
 	}
 
 	pk := encodePK(c.DB(), key)
@@ -298,7 +298,7 @@ func (r *Router) setWithExpiry(ctx context.Context, c *server.Conn, key, val, ex
 		r.writeStoreError(c, err)
 		return
 	}
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -330,7 +330,7 @@ func (r *Router) handleGetSet(ctx context.Context, c *server.Conn, args [][]byte
 
 	pk := encodePK(c.DB(), key)
 
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -459,7 +459,7 @@ func (r *Router) handleMSet(ctx context.Context, c *server.Conn, args [][]byte) 
 				r.writeStoreError(c, err)
 				return
 			}
-			if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
+			if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 				r.writeStoreError(c, err)
 				return
 			}
@@ -516,7 +516,7 @@ func (r *Router) handleMSetNX(ctx context.Context, c *server.Conn, args [][]byte
 
 	for i := 0; i < len(pairs); i += 2 {
 		pk := encodePK(c.DB(), pairs[i])
-		if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
+		if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 			r.writeStoreError(c, err)
 			return
 		}
@@ -595,7 +595,7 @@ func (r *Router) incrBy(ctx context.Context, c *server.Conn, key []byte, delta i
 
 	pk := encodePK(c.DB(), key)
 
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -633,7 +633,7 @@ func (r *Router) handleIncrByFloat(ctx context.Context, c *server.Conn, args [][
 
 	pk := encodePK(c.DB(), key)
 
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeString, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

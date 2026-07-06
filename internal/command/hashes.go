@@ -89,7 +89,7 @@ func (r *Router) ensureHashWritable(ctx context.Context, c *server.Conn, pk stri
 		r.writeStoreError(c, err)
 		return false
 	}
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeHash, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeHash); err != nil {
 		r.writeStoreError(c, err)
 		return false
 	}

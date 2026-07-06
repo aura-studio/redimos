@@ -64,7 +64,7 @@ func (r *Router) handleZIncrBy(ctx context.Context, c *server.Conn, args [][]byt
 		r.writeStoreError(c, err)
 		return
 	}
-	if _, err := r.Storage.Meta.EnsureType(ctx, pk, meta.TypeZSet, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeZSet); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}

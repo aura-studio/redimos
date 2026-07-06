@@ -292,7 +292,7 @@ func (r *Router) handleBitOp(ctx context.Context, c *server.Conn, args [][]byte)
 		r.writeStoreError(c, err)
 		return
 	}
-	if _, err := r.Storage.Meta.EnsureType(ctx, destPK, meta.TypeString, 0); err != nil {
+	if err := r.ensureTypeExpiring(ctx, destPK, meta.TypeString); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
