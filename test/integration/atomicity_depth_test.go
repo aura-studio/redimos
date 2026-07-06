@@ -11,7 +11,7 @@ import (
 // Dimension AC (atomicity/concurrency), extending the existing SETNX/INCR/register tests.
 // These are NOT byte-differentials against Redis (redimos is deliberately non-linearizable
 // for some ops); they assert the INTERNAL safety guarantee each op actually provides and
-// RE-MEASURE it on the current redimo/v3 build (the memory's contention numbers are from a
+// RE-MEASURE it on the current redimo/v2 build (the memory's contention numbers are from a
 // much older version). Two flavours:
 //   - "exact" invariants for the atomic paths (meta.cnt ADD / SETCAS / index counters):
 //     the final cardinality/value must equal the acknowledged operations — a real
@@ -136,7 +136,7 @@ func TestConcurrentHIncrByReMeasure(t *testing.T) {
 
 // TestConcurrentIdempotentAdd: many clients racing to SADD the SAME member.
 //
-// After the redimo/v3.1 count fix, SADD writes each member with an individual PutItem +
+// After the redimo v2.9 count fix, SADD writes each member with an individual PutItem +
 // ReturnValue ALL_OLD, which DynamoDB serializes on the single member item — so the added
 // count is concurrency-EXACT and all three quantities agree with Redis:
 //   - EXACTLY ONE client sees :1 (its PutItem found no prior item); the other 47 see :0;

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	redimo "github.com/aura-studio/redimo/v3"
+	redimo "github.com/aura-studio/redimo/v2"
 )
 
 // --- Sorted Set data operations (task 15.1) --------------------------------

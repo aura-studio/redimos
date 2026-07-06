@@ -18,10 +18,10 @@
 |---|---|
 | 命令覆盖 | 174 条中 **114 条经 redimo 存储支持**（含 GEO+`_ro`、BIT、HLL+`PFDEBUG`）；**42 条代理拒绝**（专属错误消息）；**14 条连接/桩**（含 SAVE/BGSAVE/…/WAIT/ROLE/PFSELFTEST 固定回复桩）；**4 条连接层**。**未知命令路径清零**：174 条真实 3.2 命令**全部显式处理**（v1.18.0 起，连 `dump`/`restore`/`migrate`/`sync`/`psync`/`slaveof` 等实现不了的也注册为代理拒绝而非未知命令） |
 | **字符/字节安全** | ✅ **完全对齐**：key、string 值、hash 字段名/值、set/zset 成员、list 元素对 0x00–0xff 全部 256 个字节值与 Redis 一致，无碰撞（v2.0.1 起） |
-| **并发原子性** | ⚠️ **部分等同**：单项读改写（INCR/HINCRBY/APPEND…）、分值自增、**SET NX/SETNX（v1.9.0 起）**已原子；**SCARD/HLEN/ZCARD 计数并发下精确（redimo v3.1.0 条件写）**；其余多项/多步写（S\*STORE、Z\*STORE、SMOVE、RPOPLPUSH、列表整表 RMW 的 LLEN）**非原子**——受 DynamoDB 单事务 100 项上限所限，大结果集无法完全等同 Redis 单线程模型 |
+| **并发原子性** | ⚠️ **部分等同**：单项读改写（INCR/HINCRBY/APPEND…）、分值自增、**SET NX/SETNX（v1.9.0 起）**已原子；**SCARD/HLEN/ZCARD 计数并发下精确（redimo v2.9.0 条件写）**；其余多项/多步写（S\*STORE、Z\*STORE、SMOVE、RPOPLPUSH、列表整表 RMW 的 LLEN）**非原子**——受 DynamoDB 单事务 100 项上限所限，大结果集无法完全等同 Redis 单线程模型 |
 | 差分（单连接） | 大量命令字节一致；残余差异见 §4 |
 
-一句话：**单连接 / 无争用下 redimos 与 Redis 3.2 高度兼容（命令语义 A–P + 线级协议 Q + 并发 AC + 被拒命令 S 共 ~20 维对真 `redis:3.2` 逐字节实测全绿）；并发下最后一个「可完全修 + 有真实影响」的分歧——cnt 计数漂移——已于 redimo v3.1.0 根治（SCARD/HLEN/ZCARD 现精确）；其余残余差异均为来自 DynamoDB 后端 / 代理设计 / redcon 的结构性分歧,已充分刻画并决定接受不修——完整清单见 §4「已知残余差异」、决策见 §6。** 测试维度层面已到「兼容性地板」（2026-07-06）。
+一句话：**单连接 / 无争用下 redimos 与 Redis 3.2 高度兼容（命令语义 A–P + 线级协议 Q + 并发 AC + 被拒命令 S 共 ~20 维对真 `redis:3.2` 逐字节实测全绿）；并发下最后一个「可完全修 + 有真实影响」的分歧——cnt 计数漂移——已于 redimo v2.9.0 根治（SCARD/HLEN/ZCARD 现精确）；其余残余差异均为来自 DynamoDB 后端 / 代理设计 / redcon 的结构性分歧,已充分刻画并决定接受不修——完整清单见 §4「已知残余差异」、决策见 §6。** 测试维度层面已到「兼容性地板」（2026-07-06）。
 
 ---
 
@@ -83,10 +83,10 @@
 | redimos **v1.33.0** | **升 redimo v2.8.0 + 52 条审查项收尾**(全量 16-agent 对抗审查,见 [[redimo-redimos-audit-2026-07]]):**P1 崩溃/DoS**——BITFIELD `#idx` 溢出 panic + 巨偏移 OOM、SETBIT 537MB 才拒、SRANDMEMBER 负 count 40GB 分配/panic(全加封顶 + 写前 `CheckValueSize`);per-command metrics + slowlog 接了线却从不记录(`ObservedDispatcher` 计时/计错/慢查询)。**P2 正确性**——SETRANGE 空值跳 WRONGTYPE、AUTH 常量时间比较、SET/SETNX 覆盖异类型**孤儿泄漏**(异步删除器 `IsLive` 守卫 + `SweepOrphans` 一见新 meta 即当活,故同步回收旧成员)、LRANGE/ZRANGE 集合 cap 按有效区间。**P2 成本**——LRANGE 走 redimo 有界 `LRANGE`、ZRANK 走有界 `ZRANK`、MGetStrings 走 `BatchGET`(zset 区间/计数因排他/±inf/等分序保留整集读,已注释权衡)。**P2 生命周期**——优雅关停 `server.Drain` 等在途命令(不丢在途 lazy-delete 入队)、sweeper 加抖动 `InitialDelay`(频繁重启也每生命周期扫一次)、deleter `IsLive` 错误计数 + metric、metrics 端口绑定失败改启动期致命。**P3**——EXPIRE/PEXPIRE 溢出不再删键、LINSERT 类型检查先于尺寸、INCRBYFLOAT/HINCRBYFLOAT 拒无穷增量、HMSET 奇参用 Redis 专属串、SINTER 按键序空短路。CI Go 钉 1.25.5 + 加真 Redis 3.2 集成 job;terraform 表 schema 修为 B 键 + skN LSI。全单元 + 差分套(LRANGE/MGET/ZRANK/list/encoding/zset 边界)对真 Redis 3.2 实测通过 |
 | redimo **v2.8.2** / redimos **v1.35.0** | **R1:可观测性/韧性深化 + 测试 DX + 代码质量**("还能改进什么"路线图第一档,8 维分析后落地)。**ctx 贯穿**:每 store 方法经 redimo `WithContext(ctx)` 把取消/截止传到 DynamoDB(此前 ctx 被吞)。**指标深化**:命令指标加 `family`(string/hash/…,命令名的函数,零基数增)+ 错误计数加 `error_class`(WRONGTYPE/ERR/NOAUTH,连接层捕获错误码)。**每命令超时** `-command-timeout`:后端卡住的命令被取消而非挂住连接。**后端启动校验**(哨兵 GetItem 快速失败)+ **`/readyz` 反映后端健康**(缓存探针不健康返 503,LB 摘流量;`/healthz` 恒 200)。**DynamoDB 遥测**:新 `internal/ddbobs` AWS SDK 中间件 + `metrics.DynamoObserver` —— 每操作 SDK 尝试次数直方图(耗尽前的节流早警)、节流重试计数、消耗读/写容量单位(超 CloudWatch 表级的按操作归因)。**PII 安全结构化请求日志** `-request-log`(仅记命令名/参数数/大小/延迟/结果类,不记键值字节)。**负载卸载熔断** `-circuit-breaker-threshold`(选入):节流风暴时对后端命令快速失败(豁免 PING/AUTH/INFO)。**redimo**:zGeneralRange/zGeneralCount 分解为命名 helper、`doBatchWrites` UnprocessedItems 重试测试(hermetic smithy 中间件)、`doc.go` 包文档、13 个慢并发测试加 `-short`(全套 ~30s)。**redimos**:handleZAdd 分解(parseZAddFlags/fastPath/flagPath,行为保持)、集成测试 skip-vs-fail 门(`REDIMOS_REQUIRE_INTEGRATION=1` 令 CI 缺 env 时红,`-short` 快跳)、5 个 fuzz 目标(glob/ParseInt/ParseFloat/parseScore/parseScoreBound,不变量=不 panic)。验证:两模块 build+vet;全单元绿;**升级后代理对真 Redis 3.2 全差分套 A–P 逐字节全过**。**未做(留作 R1b 独立发版,依赖较重)**:OpenTelemetry 分布式追踪(命令 span + otelaws 后端子 span) |
 | redimos **v1.36.0** | **全面维度审计后修补 A–P 维度不足**(把深化后的差分套跑全量、逐条闭真分歧):SETRANGE int64 偏移溢出崩溃、SELECT 绑定 [0,databases)、INCRBYFLOAT 字面 ±inf 视为合法增量(错在结果)、MSET/MSETNX 奇参回裸大写 `MSET`、SMOVE 源缺失先回 :0 再查 dest、LREM 负 count 幅值饱和、BITFIELD OVERFLOW FAIL 零填、GEOHASH/GEOPOS 缺失键回空数组、ZADD/ZINCRBY 非有限分数 `storeScore` 拒、parseScore 空串→0.0、**新实现 ZRANGEBYSCORE/ZREVRANGEBYSCORE `LIMIT`**。全套对真 Redis 3.2 全绿 3× |
-| redimo **v3.0.0** / redimos **v1.37.0** | **🔑 幻影空成员根治(破坏性 on-disk 编码分离,Go 主版本升 /v3)**。根因:值项 `sk=0x00` 与集合空成员 `encodeSK("")` 碰撞同一字节,SET-over-集合→DEL→重建时残留值项被读成幻影 `""` 成员。v3:`encodeSK("")`→`0x01`(空成员)、新 `valueItemKey()`→`0x00`(值项专属,仿 metaItemKey)、9 个集合读加 `isValueItem` 过滤、删/回收路径改按 raw 存储键删(`decodeSK(0x00)` 不再回编到 0x00,顺带修好 `#meta 0x02` 也漏删的潜伏 bug + 重写 DEL)。旧 String 数据不动(值项仍 0x00),唯破坏=v2 写的空成员(在 0x00)需 v3 下重写。对抗 5-lens 验证 ship 零缺陷;redimos 撤掉 v1.36 的 handleDel 同步回收兜底,全 A–P 差分全绿 3× |
+| redimo **v2.9.0** / redimos **v1.41.0** | **🔑 幻影空成员根治(on-disk 编码分离)**。根因:值项 `sk=0x00` 与集合空成员 `encodeSK("")` 碰撞同一字节,SET-over-集合→DEL→重建时残留值项被读成幻影 `""` 成员。改法:`encodeSK("")`→`0x01`(空成员)、新 `valueItemKey()`→`0x00`(值项专属,仿 metaItemKey)、9 个集合读加 `isValueItem` 过滤、删/回收路径改按 raw 存储键删(`decodeSK(0x00)` 不再回编到 0x00,顺带修好 `#meta 0x02` 也漏删的潜伏 bug + 重写 DEL)。旧 String 数据不动(值项仍 0x00),唯一 on-disk 变动=空成员 0x00→0x01。**⚠️版本说明:此改动最初短暂发布为 redimo /v3(v3.0.0)+ redimos v1.37.0;因 v2 尚未发布、on-disk 无已部署数据需迁移,已按用户决定回并到 v2 线(redimo v2.9.0),不再升 v3——模块路径不影响 on-disk 格式,回并纯属版本号变更**。对抗 5-lens 验证 ship 零缺陷;redimos 撤掉 v1.36 的 handleDel 同步回收兜底,全 A–P 差分全绿 3× |
 | redimos **v1.38.0** | **新维度 Q(RESP2 线级协议)+ 补 A–P 深度缺口**(纯测试,docker 3× 全绿)。Q:inline 命令、pipelining 回包序、零长 bulk vs 空 bulk、命令名+选项大小写不敏感、unknown-command 回文、协议错误帧(harness 加 `respConn.raw/rawReplies` + `eqRaw/eqPipeline/eqRawFresh`)。深度:E(TTL 跨命令保留/清除)、L(变更返回值)、A(纯字符串命令 WRONGTYPE 先于操作)、B(非整数解析)、C(MGET 混合态)、D(int64/反转区间)、H(逐命令多 DB 隔离)、P(类型覆盖)、F/G/N(空集合/二进制/位运算边)、S(21 条被拒命令契约:一等错误 + 连接存活)。**逼出 §4.4 的 redcon 超大帧 DoS** |
 | redimos **v1.39.0** | **新维度 AC(原子性/并发)——重测当前版本的真实并发保证**(纯测试,docker 2×+全绿)。确认原子路径精确(不同成员 SADD/HSET/RPUSH、INCR);**HINCRBY 重测=现完全原子**(DynamoDB `ADD`,32 并发不丢,推翻早期「丢 87%」老版数);刻画既定分歧(§4.2):并发同成员 SADD → SCARD(cnt) 高于真实基数(存储 SET 仍对)、并发 list RMW → LLEN vs 实际元素背离。净结论:**存储内容并发下正确,O(1) 计数 cnt 是近似的** |
-| redimo **v3.1.0** / redimos **v1.40.0** | **🔑 cnt 计数漂移根治——AC 维度里唯一「可完全修 + 有真实影响」的项收口**。根因:`SADD`/`SREM` 从**写前 BatchGetItem 存在性快照**推「新增/删除数」(redimos 据此对 `meta.cnt` 做原子 `ADD`),并发**同元素**下多连接各读陈旧快照、各记一次 → `SCARD` 高于(SADD)/低于(SREM)真值;存储内容一直正确,仅计数漂移。修:**每个单元素计数写改条件写**——SADD=`PutItem attribute_not_exists`、SREM/HDEL/ZREM=`DeleteItem attribute_exists`,DynamoDB 原子+串行判定,恰一个赢(其余 `ConditionalCheckFailed`);HSET/ZADD 早已用 `ReturnValue ALL_OLD` 精确故不动。`*STORE` 走新 `saddUncounted` 保留批量写快路;删掉旧 `membersPresent` 快照。**为何用条件写而非 ALL_OLD 删**:条件判定在真 DynamoDB 与 DynamoDB Local 同分区高争用(#meta 计数器)下都原子,而 ALL_OLD 在本地模拟器会被 race(实测 48 并发同成员 SREM 有 12 个各报删一次)。on-disk 项形态不变、无迁移。**实测 48 并发同成员 SADD/SREM/HDEL/ZADD/ZREM 均 winners=1、SCARD/HLEN/ZCARD=1**,redimo 全测 + redimos 全差分(docker)全绿 |
+| redimo **v2.9.0** / redimos **v1.41.0** | **🔑 cnt 计数漂移根治——AC 维度里唯一「可完全修 + 有真实影响」的项收口**。根因:`SADD`/`SREM` 从**写前 BatchGetItem 存在性快照**推「新增/删除数」(redimos 据此对 `meta.cnt` 做原子 `ADD`),并发**同元素**下多连接各读陈旧快照、各记一次 → `SCARD` 高于(SADD)/低于(SREM)真值;存储内容一直正确,仅计数漂移。修:**每个单元素计数写改条件写**——SADD=`PutItem attribute_not_exists`、SREM/HDEL/ZREM=`DeleteItem attribute_exists`,DynamoDB 原子+串行判定,恰一个赢(其余 `ConditionalCheckFailed`);HSET/ZADD 早已用 `ReturnValue ALL_OLD` 精确故不动。`*STORE` 走新 `saddUncounted` 保留批量写快路;删掉旧 `membersPresent` 快照。**为何用条件写而非 ALL_OLD 删**:条件判定在真 DynamoDB 与 DynamoDB Local 同分区高争用(#meta 计数器)下都原子,而 ALL_OLD 在本地模拟器会被 race(实测 48 并发同成员 SREM 有 12 个各报删一次)。on-disk 项形态不变、无迁移。**实测 48 并发同成员 SADD/SREM/HDEL/ZADD/ZREM 均 winners=1、SCARD/HLEN/ZCARD=1**,redimo 全测 + redimos 全差分(docker)全绿 |
 
 ---
 
@@ -108,59 +108,73 @@ Redis 的 key 与 value 是任意字节串（0x00–0xff）。redimos 各"位置
 
 ---
 
-## 4. 已知残余差异（接受不修的兼容性地板）
+## 4. 已知残余差异（发现但决定不修的兼容性地板）
 
-单连接 / 无争用下 redimos 与 Redis 3.2 高度一致（A–P + Q 线级 + AC 并发 + S 被拒共 ~20 个维度对真 `redis:3.2` 逐字节实测全绿）。以下差异是**结构性的**——来自 DynamoDB 后端、代理设计或第三方 wire 库——经充分刻画后**决定接受、不修**（判据附后）。这是 redimos 与 Redis 3.2 的**权威分歧清单**。
+单连接 / 无争用下 redimos 与 Redis 3.2 高度一致（A–P 语义 + Q 线级 + AC 并发 + S 被拒共 ~20 个维度对真 `redis:3.2` 逐字节实测全绿）。本节列出**所有已发现、且经评估决定不修**的分歧——它们都是**结构性的**（来自 DynamoDB 后端、代理设计、或第三方 wire 库 redcon），不是实现疏漏。**每条给出「原理」（为什么会这样——底层机制）与「成本」（彻底修需付出什么、为何决定不修）**。这是 redimos 与 Redis 3.2 的**权威分歧清单**。
 
-> 记法：❌ = 已决定接受不修；✅ = 曾是分歧、现已修复/改善；⚙️ = 可修但未定。
+> 曾是分歧、**现已修复**的项（幻影空成员、cnt 计数漂移、HINCRBY 原子性、SET NX/SETNX 原子性、二进制安全）不在本清单——见 §2 版本历程与 §6 决策记录。
+> 记法：❌ = 决定接受不修；⚙️ = 可修但低优先/未定。
 
 ### 4.1 存储域固有（DynamoDB 后端所限）
 
-| # | 分歧 | redimos 行为 | 判据（为何不修） |
+| 分歧 | redimos 行为 | 原理（底层机制） | 成本（为何不修） |
 |---|---|---|---|
-| ❌ | **值大小上限 ~390KB** | string/bitmap/HLL 值超过 ~390KB 即拒（`CheckValueSize`） | DynamoDB 单项 400KB 上限；Redis 是 512MB。平台硬限，不可消除 |
-| ❌ | **浮点精度 float64 vs long double** | 分数/INCRBYFLOAT 用 Go `float64`（~17 位有效数字），Redis 用 80-bit long double（~19 位）；如 ZSCORE 回读第 17 位后可不同、INCRBYFLOAT/ZINCRBY 多次累加漂移 | 「big.Float 半修」只关精度不关范围（见下行），且分数落 **DynamoDB Number**（38 位 > long double、但范围仅 1e-130..1e125）；差分已用 `eqFloatClose` 容忍累加漂移。第 17 位分歧现实无感知，**低价值** |
-| ❌ | **数值域 DynamoDB Number** | ZADD/ZINCRBY 的 ±inf/超大分值不落库：`storeScore` 确定性拒（`ERR score must be a finite number`）；`1e400`（long double 存得下）在 float64 溢出被拒；`-0` 归一化为 `0`（Redis 保留 `-0`） | DynamoDB Number 范围 ~1e-130..1e125、无 inf/NaN。分数须进 skN 的 Number 索引做排序，无法绕开。平台域 |
-| ❌ | **TTL 秒精度** | `meta.exp` 存 epoch **秒**并挂 DynamoDB 原生 TTL（秒粒度）；`PEXPIRE`/`PSETEX`/`PTTL` 被截断到整秒（`PEXPIRE k 1500`→整秒；`PTTL` 返秒的整数倍） | 亚秒过期须脱离 DynamoDB 原生 TTL、改读路径 lazy-expire；且当初有意对齐 **Pika v3.2.2**（Pika 亦无毫秒精度）。架构改，不修 |
+| ❌ **值大小上限 ~390KB** | string/bitmap/HLL 值超过 ~390KB 即拒（`CheckValueSize`）；Redis 上限 512MB | DynamoDB **单项硬上限 400KB**（含 pk/sk/属性名开销后净值 ~390KB）；一个 string 值就是一个 DynamoDB item 的 `val` 属性 | 突破须把大值**分片跨多 item** 存 + 读时重组，且 APPEND/SETRANGE/GETRANGE/BITCOUNT/BITPOS 等全部要改成跨片操作、丧失单项原子——大改。平台硬限，不修 |
+| ❌ **浮点精度 float64 vs long double** | zset 分数 / INCRBYFLOAT 用 Go `float64`（IEEE754 双精，~15–17 位有效）；Redis 用 80-bit x87 long double（~18–19 位）→ ZSCORE 回读第 17 位后可不同、多次累加漂移 | Redis 分数是 long double；redimos 的分数**必须落 DynamoDB Number 属性**并进 `skN` 数值索引排序，Go 侧用 float64 承载 | 「换 `big.Float`」只治精度、**不治范围**（Number 域仍限 1e-130..1e125，见下），且 `big.Float` 无法进 DynamoDB 数值 LSI 排序。差分已用 `eqFloatClose` 容忍累加漂移；第 17 位差异现实无感知，**低价值**，不修 |
+| ❌ **数值域 DynamoDB Number** | ZADD/ZINCRBY 的 ±inf/NaN/超大分值不落库：`storeScore` 确定性拒（`ERR ... not a finite number`）；`1e400`（long double 存得下）在 float64 溢出被拒；`-0` 归一化为 `0`（Redis 保留 `-0`） | zset 分数存 DynamoDB **Number** 并进 `skN` LSI 做区间/排序；Number 域 = 1e-130..1e125、38 位精度、**无 inf/NaN/-0** | 分数不进 Number 就无法用 DynamoDB 原生排序做 `ZRANGEBYSCORE`，只能全量取到内存排序（丧失索引下推、大 zset 爆内存）。平台域，不修 |
+| ❌ **TTL 秒精度** | `PEXPIRE`/`PSETEX`/`PTTL` 被截断到整秒（`PEXPIRE k 1500`→整秒；`PTTL` 返秒的整数倍） | `meta.exp` 存 epoch **秒** + 挂 DynamoDB 原生 TTL（DynamoDB TTL 本身就是秒粒度、后台删有最长 ~48h 延迟，redimos 另有读路径 lazy-expire 兜准时性，但仍以秒记）；当初亦**有意对齐 Pika v3.2.2**（Pika 也无毫秒 TTL） | 亚秒精度须**脱离 DynamoDB 原生 TTL**、自存毫秒 exp 且纯靠读路径 lazy-expire 判活——放弃原生后台回收后，冷键永不被访问就永不清理→堆存储成本。架构改，**用户拍板不修** |
+| ❌ **HLL 始终 dense 编码** | HyperLogLog 内部 blob 始终 dense；`GET` 一个 HLL 键拿到的原始字节、`PFDEBUG ENCODING` 恒回 `dense`，与 Redis（**从 sparse 起、超阈值才转 dense**）不同 | 寄存器（p=14→16384×6bit、MurmurHash64A、Ertl 2017 估计器）与 Redis 3.2 hll.c **逐位一致**，故 `PFCOUNT` 估值完全相同；只是省掉了 sparse 表示 | `PFCOUNT`（唯一有语义的输出）已精确等价；复刻 sparse→dense 转换只影响不透明 blob 字节与 `PFDEBUG`，无实际价值，不修 |
+| ❌ **计数/匹配类无 LIMIT 下推（读全量到内存）** | `LREM`/部分区间与匹配操作须把候选**全部读进内存**再处理，不能在 DynamoDB 侧下推 `LIMIT`/早停 | DynamoDB 的 Query 只能按 sk 区间取，无法表达「第 N 次出现即停」这类 Redis 语义；列表元素编码也不支持该下推 | 下推须换列表/成员的存储编码（大改），且大 key 才有意义；已标 deferred，功能正确（仅内存/延迟代价），不修 |
 
-### 4.2 并发原子性（异步回收 + 无版本守卫）
+### 4.2 并发原子性（多步写 + 无版本守卫）
 
-Redis 单线程串行、每命令原子；redimos 把命令映射为多次 DynamoDB 调用。**存储内容在并发下正确**（SMEMBERS/LRANGE/HKEYS 是真值），但若干原子性弱于 Redis：
+Redis 单线程串行、每命令原子；redimos 把一条命令映射为多次 DynamoDB 调用。**存储内容在并发下始终正确**（SMEMBERS/LRANGE/HGETALL 是真值），**计数 SCARD/HLEN/ZCARD 现也精确**（cnt 漂移已修，见 §6）。以下**原子性 / 线性化**仍弱于 Redis：
 
-| # | 分歧 | redimos 行为 | 判据 |
+| 分歧 | redimos 行为 | 原理（底层机制） | 成本（为何不修） |
 |---|---|---|---|
-| ❌ | **多键/多步写非原子** | `S*STORE`/`Z*STORE`/`SMOVE`/`RPOPLPUSH` 的 dest 清空-重填非事务；中间态可见 | DynamoDB 事务上限 **100 项 / 4MB**,而集合可含百万成员 → 大结果集本质无法单事务原子（分片即跨片非原子）。平台天花板 |
-| ❌ | **RMW 列表非原子** | `LSET`/`LTRIM`/`LREM` 读-改-写整表、无版本守卫；并发 RPUSH 交错时 **LLEN(meta.cnt) 与实际元素背离**（实测 24 并发 LLEN=5 vs LRANGE=90）；列表结构仍有效、不腐坏。**cnt 计数修复后,这是唯一残留的计数分歧**（集合/哈希/zset 的 SCARD/HLEN/ZCARD 已精确,仅列表 LLEN 在整表 RMW 下仍会背离） | 需 per-incarnation epoch 条件写重试才能根治（整表原子重写又撞 100 项事务上限）；架构改，不修 |
-| ❌ | **DEL+重建单键寄存器非线性化** | 顺序/并发 `DEL k; SET k v; GET k` 可返回 nil（string 分体存 + SET 非快照双读）；Porcupine 实测确认不可线性化、且不保证不丢写 | 彻底修需 per-incarnation epoch fence（v1.30 试过事务 fence 反而令并发 SET 撞 `TransactionConflictException`,已 revert）。架构改，不修 |
-| ✅ | **计数漂移（cnt）已根治（redimo v3.1.0 / redimos v1.40.0）** | 曾:`SADD`/`SREM` 用**写前 BatchGetItem 快照**定新增/删除数,并发**同元素**下多连接各读到陈旧快照、各记一次 → `SCARD` 高于（SADD）或低于（SREM）真值（实测 48 并发同成员 SADD→SCARD=27、SREM→整键被误删）。现:**每个单元素计数写改条件写**——SADD=`attribute_not_exists` 建、SREM/HDEL/ZREM=`attribute_exists` 删,DynamoDB 原子+串行,恰一个赢（其余 `ConditionalCheckFailed`）;HSET/ZADD 早已用 `ReturnValue ALL_OLD` 精确。**实测 48 并发同成员 SADD/SREM/HDEL/ZADD/ZREM 均 winners=1、SCARD/HLEN/ZCARD=1** | 已修 |
-| ✅ | **已原子/已改善（2026-07-06 在 redimo/v3 重测确认）** | INCR/DECR（SETCAS 重试，计数==已确认）、**HINCRBY/HINCRBYFLOAT 现完全原子**（DynamoDB `ADD`，32 并发不丢——推翻早期「丢 87%」的老版实测）、SET NX/SETNX（条件 meta 占位，恰一个赢）、不同成员并发 SADD/HSET/RPUSH 计数精确 | — |
+| ❌ **多键/多步复合写非原子** | `S*STORE`/`Z*STORE`/`SMOVE`/`RPOPLPUSH`/`BITOP` 的 dest 清空-重填不在一个事务里，中间态可被并发读观察；且 `RPOPLPUSH`=先 RPOP 源再 LPUSH 目标两步，**中途崩溃/网络失败会令弹出元素既没进目标也回不到源（元素丢失）**；`LSET`=删旧 item→写新 item，删成功而写失败会正确上报错误 | 这些命令要动「meta + 多个 data item」跨多个 DynamoDB item，未包 `TransactWriteItems`；DynamoDB 事务上限 **100 项 / 4MB**，而集合/zset 可含百万成员 | 大结果集**本质无法**单事务原子（>100 项须分片，分片即跨片非原子）——平台天花板，非实现取舍。成员数有界者（SMOVE/RPOPLPUSH/MSETNX≤50）可用事务收口但价值有限，不修 |
+| ❌ **列表整表 RMW 非原子（LLEN 背离）** | `LSET`/`LTRIM`/`LREM` 读整表→改→重写整表、无版本守卫；并发 RPUSH 交错时 **LLEN(meta.cnt) 与实际元素背离**（实测 24 并发 LLEN=5 vs LRANGE=90）；列表结构仍有效、不腐坏 | 整表 RMW 的「读快照」与「写回」之间无 fence，并发 push 落在两者之间就被覆盖/漏计。这是 **cnt 计数修复后唯一残留的计数分歧**（集合/哈希/zset 计数已精确，仅列表 RMW 例外） | 根治需 **per-incarnation epoch**（每 key 一个世代号，RMW 条件于世代未变才写、变了重试）；而整表原子重写对大列表又撞 100 项事务上限。架构改，**用户拍板不修** |
+| ❌ **DEL+重建单键寄存器非线性化** | 顺序/并发 `DEL k; SET k v; GET k` 可返回 nil 或旧值；Porcupine 实测确认不可线性化、且不保证不丢写 | string 值**分体存储**（meta 项 + value 项）+ SET **非快照双写**（先改 meta 再改 value，两次 UpdateItem）+ DEL 只删 meta、value 异步回收 → GET 可能读到「新 meta 配旧滞留 value」，或异步回收器在 DEL 与 SET 之间抹掉刚建的 value | 根治需 per-incarnation epoch fence（读按当前世代过滤、回收按世代条件删）。**v1.30 试过用 `TransactWriteItems` 做回收 fence，反令并发/顺序普通 `SET` 撞 `TransactionConflictException` 失败 151 次（已 revert）**——热路径铺事务会让普通写失败，代价不可接受。架构改，**用户拍板不修** |
+| ❌ **DEL 异步回收 best-effort（残留 orphan 靠周扫兜底）** | DEL 同步只删 `#meta`（键立即逻辑消失、O(1)），数据成员由后台懒删器限速异步回收；懒删失败/积压会残留「有成员无 meta」的 orphan（占存储，读路径永远读不到），靠每周 `SweepOrphans` 全表最终一致扫兜底 | 删一个 pk 下全部 item 需 Query 分页 + BatchWriteItem（25/批）多轮，是 O(size) 且可能被限流/失败的操作，无法在一次 O(1) DEL 里同步完成——解耦「逻辑删（删 meta）」与「物理回收」是刻意设计，orphan 是其固有副产物 | 根除须让 DEL 同步回收全部成员（牺牲 O(1)、长键卡 DEL、受限流），或引入强一致分布式回收账本。**客户端可见行为与 Redis 一致（键即刻消失）**，仅存储短暂浪费，明确标 best-effort，不修 |
 
 ### 4.3 SCAN 游标设计
 
-- ❌ **不透明 server-minted 游标**：redimos 用注册表签发的游标 token,非 Redis 的**无状态 reverse-binary 位置**。因此一个非代理签发的**数字游标**（负数、任意 uint64——Redis 的 `strtoul` 会接受并绕成大 uint64 返数据）在 redimos 回 `ERR invalid cursor`。设计分歧，不修。
+| 分歧 | redimos 行为 | 原理（底层机制） | 成本（为何不修） |
+|---|---|---|---|
+| ❌ **不透明 server-minted 游标** | SCAN/HSCAN/SSCAN/ZSCAN 返回代理签发的游标 token；客户端传入一个**非代理签发**的数字游标（负数、任意 uint64）→ `ERR invalid cursor`（Redis 的 `strtoul` 会接受并绕成大 uint64 返数据） | Redis 游标是**无状态 reverse-binary 位置**（可任意构造、跨实例复用）；redimos 底层是 DynamoDB `LastEvaluatedKey` 分页，无法编码成 Redis 那种位置数，只能签发 opaque token 由注册表映射 | 要复刻 Redis 无状态游标须自建「把 DynamoDB pk/sk 双射到单调 uint64 位置」的编码，复杂且脆弱（rehash 语义对不上）。真实客户端都是回传上一页游标、不构造游标，影响小。设计分歧，不修 |
 
-### 4.4 线级协议（redcon v1.6.2 继承）
+### 4.4 线级协议（继承第三方 wire 库 redcon v1.6.2）
 
-- ❌ **无 bulk/multibulk 长度上界**：redcon 只拒负数/零/非数字长度,**不设 Redis 的 512MB(bulk)/1048576(multibulk count)上界**。声明超大长度的帧（如 `$629145600`,~15 字节）会让代理**等待/缓冲**声明的字节,而非像 Redis 立即回 `invalid bulk length`——**DoS-adjacent**。命令层拦不住（帧永不成型到达 handler）,修需 fork/换 redcon。**成本太高,不修**（非 fork 只能包 net.Conn 加读超时 + 累计字节上限堵住 DoS,但回不出 Redis 精确错误）。
-- ❌ 空 multibulk `*0` 被 redcon 拒（Redis 3.2 忽略之并解析后续为新命令）；集合 SCAN 对**缺失键**先验 COUNT 后查存在（Redis 相反,`HSCAN missing 0 COUNT 0` 那里两者不同）。均 redcon 继承的小分歧,不修。
+| 分歧 | redimos 行为 | 原理（底层机制） | 成本（为何不修） |
+|---|---|---|---|
+| ❌ **无 bulk/multibulk 长度上界（DoS-adjacent）** | 声明超大长度的帧（如 `$629145600`，~15 字节）会让代理**等待/缓冲**声明的字节，而非像 Redis 立即回 `invalid bulk length` | redcon 的 parseInt 只拒负数/零/非数字，**不设** Redis 的 512MB(bulk)/1048576(multibulk count) 上界；帧永不成型 → 到不了 handler，命令层拦不住 | 修需 **fork 或替换 redcon**（在 wire 解析器加长度上界）；非 fork 只能包 `net.Conn` 加读超时 + 累计字节上限堵 DoS，但回不出 Redis 精确错误文本。**用户拍板成本太高，不修** |
+| ❌ **空 multibulk `*0`** | redcon 拒 `*0`；Redis 3.2 忽略之并把后续字节当新命令解析 | 同上，redcon 对 count≤0 一律 `invalid multibulk length` | 同属 wire 库继承，fork 才能改，不修 |
+| ⚙️ **HSCAN 缺失键的 COUNT 校验顺序** | `HSCAN missing 0 COUNT 0`：redimos 先验 `COUNT`（报错），Redis 先查键存在（缺失→空 scan、不看 COUNT） | redimos 命令层先解析校验全部参数再执行；Redis 的 hscanCommand 在缺失键时短路返回 emptyscan，早于 scanGenericCommand 校验 COUNT | 对齐它要为每个 SCAN 命令加「缺失键短路」特判、破坏统一校验流水；仅病态输入触发，价值极低，不修 |
 
 ### 4.5 错误文本风格 / 未实现命令
 
-- ⚙️ **arity 错误风格**：多数已按 live `redis:3.2` oracle 对齐（如 `MSET` 奇参回裸大写 `wrong number of arguments for MSET`、`SELECT` 越界回 `invalid DB index`）；其余现代带引号风格（`... for 'get' command`）为系统性风格差,按需再统一。
-- ❌ **42 条命令代理拒绝**（一等专属错误,非「未知命令」）：`SORT`/`RENAME`/`RENAMENX`/`MOVE`/`KEYS`/`RANDOMKEY`/`OBJECT`/`DUMP`/`RESTORE`/`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`SUBSCRIBE`/`PUBLISH`/`BLPOP`/`BRPOP`/`BRPOPLPUSH`/`EVAL`/`SCRIPT`/`FLUSHDB`/`FLUSHALL`/… —— **故意的功能边界**（无脚本/事务/阻塞/全表扫/共享表擦除/复制/集群）。这些无法差分对拍（Redis 会执行/阻塞）,由 S 维度验证「拒得干净且连接存活」。见 `command-reference.md`。
+| 分歧 | redimos 行为 | 原理（底层机制） | 成本（为何不修） |
+|---|---|---|---|
+| ❌ **42 条命令代理拒绝** | `SORT`/`RENAME`/`RENAMENX`/`MOVE`/`KEYS`/`RANDOMKEY`/`OBJECT`/`DUMP`/`RESTORE`/`MULTI`/`EXEC`/`DISCARD`/`WATCH`/`SUBSCRIBE`/`PUBLISH`/`BLPOP`/`BRPOP`/`BRPOPLPUSH`/`EVAL`/`SCRIPT`/`FLUSHDB`/`FLUSHALL`/… 回一等专属错误（非「未知命令」） | **故意的功能边界**：无脚本/事务/阻塞/发布订阅/全表扫描/共享表擦除/复制/集群——要么与「无状态代理 + 共享 DynamoDB 表」模型冲突（KEYS/FLUSH 全表扫、MULTI 事务、BLPOP 阻塞、SUBSCRIBE 长连），要么 DynamoDB 无对应原语（DUMP/RESTORE 序列化、SORT） | 逐个实现代价极高且部分与架构根本冲突（阻塞/事务/全表扫在共享表上是反模式）。有意不做，由 S 维度验证「拒得干净且连接存活」。见 `command-reference.md` |
+| ⚙️ **少数错误文本的现代引号风格** | 极少数错误用现代 `... for 'get' command` 风格，Redis 3.2 是裸大写 | 3.2 错误文本是历史风格；redimos 个别串沿用了更现代的 go-redis 风格 | 高频命令已按 live oracle 逐字对齐；剩余是系统性风格差、纯文本无语义影响，按需再统一（低优先，非硬不修） |
+| ❌ **DBSIZE 恒返 `:0`（及若干客户端探针桩）** | `DBSIZE` 总回 `:0`；`COMMAND`/`CLIENT`/`CONFIG GET`/`TIME`/`WAIT`/`ROLE` 等为固定桩回复（供客户端握手/探针，不反映真实状态） | 真实 DBSIZE 要数「共享 DynamoDB 表里属于当前逻辑 DB 的全部键」= 一次全表 `Scan`（O(表)、跨多租户逻辑 DB、且代价随全库线性增长）；桩化让客户端探针在无后端/大库时都能秒回 | 精确 DBSIZE 须全表扫或维护一个全局键计数器（并发写热点）；与「无状态代理 + 共享表」模型冲突、价值低，桩回 `:0`，不修 |
 
-### 4.6 redimos 更严 / 超集（非劣化）
+### 4.6 redimos 更严 / 超集（差异但非劣化）
 
-- **多字段 HSET 超集**：redimos 支持 `HSET k f1 v1 f2 v2 …`（Redis 4.0 前向兼容）,Redis 3.2 对此回 arity 错误。这是**有意的超集**（redimos 接受得更多）。
-- **拒绝 Redis 的 C-UB 怪癖（redimos 更正确）**：`SELECT -9223372036854775808` → Redis 把 long 截给 `int` 参、`(int)INT64_MIN==0` 回 `+OK`（C 截断 bug）,redimos 正确判越界拒；`DECRBY k -9223372036854775808` → Redis `-(-2^63)` C 溢出绕回存 `INT64_MIN`,redimos 正确判溢出拒。这些是 redimos **比 Redis 严谨**,不追随其未定义行为。
+这些是 redimos 与 Redis 3.2 **有差异但不是缺陷**——要么接受得更多，要么比 Redis 更正确。
+
+| 分歧 | redimos 行为 | 原理（底层机制） | 立场 |
+|---|---|---|---|
+| **多字段 HSET 超集** | 接受 `HSET k f1 v1 f2 v2 …`（Redis 4.0+ 语法），Redis 3.2 回 arity 错误 | redimos 的 HSET 实现直接支持多字段（对齐更高版本），是**向前兼容的超集** | 有意超集，不回退 |
+| **拒绝 Redis 的 C 未定义行为怪癖** | `SELECT -9223372036854775808`→Redis 因 `(int)INT64_MIN==0` 回 `+OK`，redimos 判越界拒；`DECRBY k -9223372036854775808`→Redis C 溢出绕回存 `INT64_MIN`，redimos 判溢出拒 | Redis 这两处依赖 C 的整型截断/溢出 UB；redimos 用 Go 正确判界 | 有意**比 Redis 更正确**，不追随其 UB |
 
 ---
 
 ## 5. 并发原子性
 
-> **权威版见 §4.2**（2026-07-06 在 redimo/v3 上以 AC 维度重测并修:**HINCRBY 现完全原子**、**cnt 计数漂移已根治**（redimo v3.1.0 把 SADD/SREM/HDEL/ZREM 的计数改条件写））。本节保留 SET NX 收口与事务上限的背景叙述。
+> **权威版见 §4.2**（2026-07-06 在 redimo/v2 上以 AC 维度重测并修:**HINCRBY 现完全原子**、**cnt 计数漂移已根治**（redimo v2.9.0 把 SADD/SREM/HDEL/ZREM 的计数改条件写））。本节保留 SET NX 收口与事务上限的背景叙述。
 
-Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多次 DynamoDB 调用；能用单项/原生原子操作表达的已原子，需"多 item 一致"的则非原子。**净结论:存储内容在并发下正确;O(1) 计数 SCARD/HLEN/ZCARD 现也精确（redimo v3.1.0 每个单元素计数写用条件写,恰一个赢）,仅 LLEN 在列表整表 RMW（LTRIM/LSET/LREM）下仍会与实际元素背离（§4.2）。**
+Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多次 DynamoDB 调用；能用单项/原生原子操作表达的已原子，需"多 item 一致"的则非原子。**净结论:存储内容在并发下正确;O(1) 计数 SCARD/HLEN/ZCARD 现也精确（redimo v2.9.0 每个单元素计数写用条件写,恰一个赢）,仅 LLEN 在列表整表 RMW（LTRIM/LSET/LREM）下仍会与实际元素背离（§4.2）。**
 
 | 类别 | 命令 | 是否等同 Redis 3.2 |
 |---|---|---|
@@ -170,7 +184,7 @@ Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多
 | 不同成员计数 | SADD/ZADD/HSET distinct | ✅ 稳态计数正确 |
 | **NX 条件写** | SET NX / SETNX | ✅ **原子（v1.9.0 起）**：单条条件 meta 写占位，并发只有一个"赢" |
 | **多步复合写** | S\*STORE / Z\*STORE / SMOVE / RPOPLPUSH 中间态 | ❌ 非原子（dest 清空-重填非事务） |
-| **计数 cnt** | SCARD / HLEN / ZCARD（集合/哈希/zset） | ✅ **精确（redimo v3.1.0 条件写,并发同元素恰一个赢）** |
+| **计数 cnt** | SCARD / HLEN / ZCARD（集合/哈希/zset） | ✅ **精确（redimo v2.9.0 条件写,并发同元素恰一个赢）** |
 | 列表计数 | LLEN vs 实际元素（并发整表 RMW） | ❌ 背离（RMW 无版本守卫，非计数写问题） |
 | 删除竞态 | delete-on-empty、DEL+重建 | ❌ 非原子（Load→DeleteMeta + 异步回收） |
 
@@ -182,17 +196,17 @@ Redis 单线程串行执行，每条命令原子。redimos 把命令映射为多
 
 ## 6. 决策记录（2026-07-06 平台期评估）
 
-命令语义（A–P）、线级协议（Q）、并发（AC）、被拒命令（S）四层维度均已覆盖并对真 `redis:3.2` 全绿——**测试维度层面已到「兼容性地板」**。**曾经唯一「可完全修 + 有真实影响」的 cnt 计数漂移已修复**（redimo v3.1.0）;**剩下的四项全部是「接受不修」的有界改架构项目**,继续加差分用例=递减收益 / 重复确认既定地板。各项决策:
+命令语义（A–P）、线级协议（Q）、并发（AC）、被拒命令（S）四层维度均已覆盖并对真 `redis:3.2` 全绿——**测试维度层面已到「兼容性地板」**。**曾经唯一「可完全修 + 有真实影响」的 cnt 计数漂移已修复**（redimo v2.9.0）;**剩下的四项全部是「接受不修」的有界改架构项目**,继续加差分用例=递减收益 / 重复确认既定地板。各项决策:
 
 | 项 | 关掉的分歧 | 决策 | 理由 |
 |---|---|---|---|
-| **cnt 条件写** | §4.2 计数漂移（SCARD/HLEN/ZCARD 并发同元素偏差） | ✅ **已修复（redimo v3.1.0 / redimos v1.40.0）** | 四项里唯一可完全修 + 有真实可观测影响的。已把 SADD/SREM/HDEL/ZREM 的计数从写前快照改条件写（`attribute_not_exists`/`attribute_exists`,恰一个赢）;实测 48 并发同元素 winners=1 |
+| **cnt 条件写** | §4.2 计数漂移（SCARD/HLEN/ZCARD 并发同元素偏差） | ✅ **已修复（redimo v2.9.0 / redimos v1.41.0）** | 四项里唯一可完全修 + 有真实可观测影响的。已把 SADD/SREM/HDEL/ZREM 的计数从写前快照改条件写（`attribute_not_exists`/`attribute_exists`,恰一个赢）;实测 48 并发同元素 winners=1 |
 | 毫秒 TTL | §4.1 TTL 秒精度 | ❌ **接受不修** | 成本太高（存毫秒 + 脱离 DynamoDB 原生 TTL） |
 | per-incarnation epoch | §4.2 多键/RMW/DEL+重建非线性化（含列表 LLEN 背离） | ❌ **接受不修** | 成本太高（加世代号 + 全 RMW/多键改条件写重试;整表原子重写又撞 100 项事务上限） |
 | big.Float 分数 | §4.1 float64 精度 | ❌ **接受不修** | 半修（只关精度不关范围）、低价值（第 17 位、差分已 `eqFloatClose` 容忍） |
 | redcon 长度上界 | §4.4 超大帧 DoS | ❌ **接受不修** | 成本太高（需 fork/换 redcon） |
 
-**已完成的历史项**（不再是待办）:**cnt 计数漂移根治（redimo v3.1.0 条件写,见上）**、SET NX/SETNX 原子化（v1.9.0）、HINCRBY 原子化（DynamoDB `ADD`,2026-07 重测确认）、幻影空成员根治（redimo v3.0.0 编码分离,见 §2）、GEO 字节兼容（v1.8.0,仅余可选的 STORE/STOREDIST）、多数 arity 文本已按 oracle 对齐、ZADD NX/XX/CH/INCR 四标志（v1.32.0）、ZRANGEBYSCORE/ZREVRANGEBYSCORE `LIMIT`（v1.36.0）。
+**已完成的历史项**（不再是待办）:**cnt 计数漂移根治（redimo v2.9.0 条件写,见上）**、SET NX/SETNX 原子化（v1.9.0）、HINCRBY 原子化（DynamoDB `ADD`,2026-07 重测确认）、幻影空成员根治（redimo v2.9.0 编码分离,见 §2）、GEO 字节兼容（v1.8.0,仅余可选的 STORE/STOREDIST）、多数 arity 文本已按 oracle 对齐、ZADD NX/XX/CH/INCR 四标志（v1.32.0）、ZRANGEBYSCORE/ZREVRANGEBYSCORE `LIMIT`（v1.36.0）。
 
 ---
 
