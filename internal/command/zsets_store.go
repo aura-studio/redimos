@@ -123,9 +123,9 @@ func (r *Router) handleZStore(ctx context.Context, c *server.Conn, args [][]byte
 	keyArgs := rest[:numKeys]
 	tail := rest[numKeys:]
 
-	weights, agg, ok := parseZStoreOptions(tail, int(numKeys))
-	if !ok {
-		w.Error(resp.ErrSyntax)
+	weights, agg, errText := parseZStoreOptions(tail, int(numKeys))
+	if errText != "" {
+		w.Error(errText)
 		return
 	}
 
@@ -146,6 +146,19 @@ func (r *Router) handleZStore(ctx context.Context, c *server.Conn, args [][]byte
 	}
 
 	result := combineZStores(operands, weights, agg, inter)
+
+	// Validate every RESULT score against the DynamoDB Number domain BEFORE touching
+	// dest. A WEIGHTS multiplier or SUM aggregate can push a result to ±inf or past
+	// the domain (e.g. WEIGHTS inf, or summing near-max scores); those are unstorable.
+	// Rejecting here — ahead of the DeleteMeta/DeleteMembers below — keeps *STORE
+	// all-or-nothing instead of wiping dest and then failing the backend write. Redis
+	// stores such scores; redimos cannot (documented §4.1 platform limit).
+	for _, score := range result {
+		if e := checkScoreDomain(score); e != "" {
+			w.Error(e)
+			return
+		}
+	}
 
 	// Guard the members that will be stored (dest key name + each result member).
 	members := make([]storage.ZMember, 0, len(result))
@@ -195,12 +208,18 @@ func (r *Router) handleZStore(ctx context.Context, c *server.Conn, args [][]byte
 	w.Int(int64(added))
 }
 
+// errZWeightNotFloat is Redis' getDoubleFromObjectOrReply message for a
+// non-numeric WEIGHTS value (zunionInterGenericCommand).
+const errZWeightNotFloat = "ERR weight value is not a float"
+
 // parseZStoreOptions parses the optional trailing tokens of ZUNIONSTORE /
 // ZINTERSTORE: a "WEIGHTS w1 .. wN" clause (exactly numKeys floats, defaulting to
 // all 1.0 when absent) and an "AGGREGATE SUM|MIN|MAX" clause (defaulting to SUM).
-// ok=false signals a syntax error (a malformed clause, a bad weight/aggregate
-// value, or an unexpected token).
-func parseZStoreOptions(tail [][]byte, numKeys int) (weights []float64, agg zAggregate, ok bool) {
+// errText is "" on success; otherwise it is the exact Redis error body — a
+// structural problem (too few weight tokens, a bad AGGREGATE value, an unexpected
+// token) is a syntax error, but a present-but-non-numeric weight is the specific
+// "weight value is not a float" (getDoubleFromObjectOrReply).
+func parseZStoreOptions(tail [][]byte, numKeys int) (weights []float64, agg zAggregate, errText string) {
 	weights = make([]float64, numKeys)
 	for i := range weights {
 		weights[i] = 1
@@ -211,21 +230,22 @@ func parseZStoreOptions(tail [][]byte, numKeys int) (weights []float64, agg zAgg
 	for i < len(tail) {
 		switch strings.ToUpper(string(tail[i])) {
 		case "WEIGHTS":
-			// Exactly numKeys weight values must follow.
+			// The WEIGHTS token only matches when at least numKeys values follow;
+			// otherwise Redis falls through to a syntax error.
 			if len(tail)-(i+1) < numKeys {
-				return nil, agg, false
+				return nil, agg, resp.ErrSyntax
 			}
 			for j := 0; j < numKeys; j++ {
 				f, valid := parseScore(tail[i+1+j])
 				if !valid {
-					return nil, agg, false
+					return nil, agg, errZWeightNotFloat
 				}
 				weights[j] = f
 			}
 			i += 1 + numKeys
 		case "AGGREGATE":
 			if i+1 >= len(tail) {
-				return nil, agg, false
+				return nil, agg, resp.ErrSyntax
 			}
 			switch strings.ToUpper(string(tail[i+1])) {
 			case "SUM":
@@ -235,15 +255,15 @@ func parseZStoreOptions(tail [][]byte, numKeys int) (weights []float64, agg zAgg
 			case "MAX":
 				agg = zAggMax
 			default:
-				return nil, agg, false
+				return nil, agg, resp.ErrSyntax
 			}
 			i += 2
 		default:
-			return nil, agg, false
+			return nil, agg, resp.ErrSyntax
 		}
 	}
 
-	return weights, agg, true
+	return weights, agg, ""
 }
 
 // loadZStoreOperand reads an operand key of ZUNIONSTORE / ZINTERSTORE into a

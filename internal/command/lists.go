@@ -50,8 +50,11 @@ import (
 func (r *Router) registerLists() {
 	r.reg("LPUSH", -3, true, r.handleLPush)
 	r.reg("RPUSH", -3, true, r.handleRPush)
-	r.reg("LPUSHX", -3, true, r.handleLPushX)
-	r.reg("RPUSHX", -3, true, r.handleRPushX)
+	// Redis 3.2 LPUSHX/RPUSHX take exactly one value (arity 3); multi-value push
+	// was only added in Redis 4.0. A 4+ arg form must be a wrong-number-of-args
+	// error, not a multi-push.
+	r.reg("LPUSHX", 3, true, r.handleLPushX)
+	r.reg("RPUSHX", 3, true, r.handleRPushX)
 	r.reg("LPOP", 2, true, r.handleLPop)
 	r.reg("RPOP", 2, true, r.handleRPop)
 	r.reg("LRANGE", 4, false, r.handleLRange)

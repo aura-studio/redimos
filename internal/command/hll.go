@@ -6,11 +6,12 @@ package command
 // no redimo change is needed.
 //
 // The register math is a faithful port of Redis 3.2 hll.c: MurmurHash64A (seed
-// 0xadc83b19), p=14 → 16384 registers of 6 bits, and the Ertl 2017 cardinality
-// estimator (hllSigma / hllTau). redimos always writes the DENSE encoding, so the
-// stored blob is not byte-identical to Redis (which starts sparse), but because
-// the registers are computed identically, PFCOUNT returns the same estimate as
-// Redis for the same set of elements.
+// 0xadc83b19), p=14 → 16384 registers of 6 bits, and Redis 3.2's LEGACY cardinality
+// estimator (harmonic mean + LINEARCOUNTING + bias-correction polynomial — NOT the
+// newer Ertl-2017 hllSigma/hllTau estimator, which Redis only adopted in 4.0).
+// redimos always writes the DENSE encoding, so the stored blob is not byte-identical
+// to Redis (which starts sparse), but because the registers AND the estimator match,
+// PFCOUNT returns the same value as redis:3.2 for the same set of elements.
 
 import (
 	"context"
@@ -35,8 +36,6 @@ const (
 	hllRegBytes     = (hllRegisters*hllBits + 7) / 8 // 12288
 	hllDenseEncoding = 0
 )
-
-var hllAlphaInf = 0.5 / math.Ln2
 
 // errHLLWrongType is the sentinel for "the key is a String but not a valid HLL".
 var errHLLWrongType = errors.New("WRONGTYPE Key is not a valid HyperLogLog string value.")
@@ -89,7 +88,7 @@ func (r *Router) handlePFDebug(ctx context.Context, c *server.Conn, args [][]byt
 	switch sub {
 	case "getreg":
 		if len(args) != 3 {
-			w.Error(pfdebugUnknownErr(args[1]))
+			w.Error(pfdebugArityErr(args[1]))
 			return
 		}
 		buf := resp.AppendArrayHeader(nil, hllRegisters)
@@ -99,19 +98,23 @@ func (r *Router) handlePFDebug(ctx context.Context, c *server.Conn, args [][]byt
 		c.Redcon().WriteRaw(buf)
 	case "encoding":
 		if len(args) != 3 {
-			w.Error(pfdebugUnknownErr(args[1]))
+			w.Error(pfdebugArityErr(args[1]))
 			return
 		}
 		// redimos always writes the dense encoding.
 		w.SimpleString("dense")
 	case "todense":
 		if len(args) != 3 {
-			w.Error(pfdebugUnknownErr(args[1]))
+			w.Error(pfdebugArityErr(args[1]))
 			return
 		}
 		// Already dense: zero conversions.
 		w.Int(0)
 	case "decode":
+		if len(args) != 3 {
+			w.Error(pfdebugArityErr(args[1]))
+			return
+		}
 		// DECODE only applies to the sparse encoding; the stored blob is dense.
 		w.Error("ERR HLL encoding is not sparse")
 	default:
@@ -119,10 +122,15 @@ func (r *Router) handlePFDebug(ctx context.Context, c *server.Conn, args [][]byt
 	}
 }
 
-// pfdebugUnknownErr matches Redis' error for an unknown PFDEBUG subcommand or a
-// wrong argument count, echoing the subcommand as the client sent it.
+// pfdebugCommand splits its errors: an UNKNOWN subcommand echoes the name, while a
+// KNOWN subcommand invoked with the wrong argument count reports an arity error.
+// Both echo the subcommand as the client sent it (case preserved).
 func pfdebugUnknownErr(sub []byte) string {
-	return fmt.Sprintf("ERR Unknown PFDEBUG subcommand or wrong number of arguments for '%s'", string(sub))
+	return fmt.Sprintf("ERR Unknown PFDEBUG subcommand '%s'", string(sub))
+}
+
+func pfdebugArityErr(sub []byte) string {
+	return fmt.Sprintf("ERR Wrong number of arguments for the '%s' subcommand", string(sub))
 }
 
 // handlePFAdd implements PFADD key [element ...]. Replies :1 if at least one
@@ -341,60 +349,45 @@ func denseSetRegister(regs []byte, regnum, val int) {
 	}
 }
 
-// hllCount estimates the cardinality from the dense registers using the Redis 3.2
-// (Ertl 2017) estimator.
+// hllCount estimates the cardinality from the dense registers using Redis 3.2's
+// LEGACY estimator (hyperloglog.c hllCount): the harmonic-mean raw estimate with
+// alpha bias, then LINEARCOUNTING for small cardinalities and a polynomial bias
+// correction in the mid-range. NOTE: this is deliberately NOT the newer Ertl-2017
+// estimator (hllSigma/hllTau) — that one was adopted in Redis 4.0, and using it
+// makes PFCOUNT differ from redis:3.2 by a unit or two for the same registers. The
+// result is truncated (uint64_t cast), not rounded, matching Redis.
 func hllCount(regs []byte) int64 {
-	var reghisto [64]int
-	for j := 0; j < hllRegisters; j++ {
-		reghisto[denseGetRegister(regs, j)]++
-	}
-
 	m := float64(hllRegisters)
-	z := m * hllTau((m-float64(reghisto[hllQ+1]))/m)
-	for j := hllQ; j >= 1; j-- {
-		z += float64(reghisto[j])
-		z *= 0.5
-	}
-	z += m * hllSigma(float64(reghisto[0])/m)
-	e := math.Round(hllAlphaInf * m * m / z)
-	return int64(e)
-}
+	alpha := 0.7213 / (1 + 1.079/m)
 
-func hllSigma(x float64) float64 {
-	if x == 1.0 {
-		return math.Inf(1)
-	}
-	y := 1.0
-	z := x
-	for {
-		x *= x
-		zPrime := z
-		z += x * y
-		y += y
-		if z == zPrime {
-			break
+	// E = SUM(2^-register); ez counts zero registers (each contributing 2^0 = 1).
+	var e float64
+	ez := 0
+	for j := 0; j < hllRegisters; j++ {
+		reg := denseGetRegister(regs, j)
+		if reg == 0 {
+			ez++
+		} else {
+			e += 1.0 / float64(uint64(1)<<uint(reg))
 		}
 	}
-	return z
-}
+	e += float64(ez) // the zero registers: 2^0 each
 
-func hllTau(x float64) float64 {
-	if x == 0.0 || x == 1.0 {
-		return 0.0
+	e = (1.0 / e) * alpha * m * m
+
+	if e < m*2.5 && ez != 0 {
+		// LINEARCOUNTING for small cardinalities.
+		e = m * math.Log(m/float64(ez))
+	} else if m == 16384 && e < 72000 {
+		// Bias-correction polynomial for the p=14 (16384-register) case.
+		bias := 5.9119e-18*(e*e*e*e) -
+			1.4253e-12*(e*e*e) +
+			1.2940e-7*(e*e) -
+			5.2921e-3*e +
+			83.3216
+		e -= e * (bias / 100)
 	}
-	y := 1.0
-	z := 1 - x
-	for {
-		x = math.Sqrt(x)
-		zPrime := z
-		y *= 0.5
-		d := 1 - x
-		z -= d * d * y
-		if z == zPrime {
-			break
-		}
-	}
-	return z / 3
+	return int64(e) // truncate, matching Redis' (uint64_t) cast
 }
 
 // murmur64A is MurmurHash64A over data with the given seed (little-endian block

@@ -15,7 +15,6 @@ package command
 import (
 	"context"
 	"math/bits"
-	"strconv"
 	"strings"
 
 	"github.com/aura-studio/redimos/v2/internal/guard"
@@ -125,12 +124,6 @@ func (r *Router) handleSetBit(ctx context.Context, c *server.Conn, args [][]byte
 // the end). Replies the number of set bits.
 func (r *Router) handleBitCount(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	// Only the bare form or the full "start end" form are valid.
-	if len(args) != 2 && len(args) != 4 {
-		w.Error(resp.ErrSyntax)
-		return
-	}
-
 	cur, found, wrongType, err := r.readCurrentString(ctx, encodePK(c.DB(), args[1]))
 	if err != nil {
 		r.writeStoreError(c, err)
@@ -140,7 +133,19 @@ func (r *Router) handleBitCount(ctx context.Context, c *server.Conn, args [][]by
 		w.Error(resp.ErrWrongType)
 		return
 	}
-	if !found || len(cur) == 0 {
+	if !found {
+		// Redis' lookupKeyReadOrReply(czero) replies :0 for a missing key BEFORE the
+		// arg-count validation, so BITCOUNT missing 1 2 3 is :0, not a syntax error.
+		w.Int(0)
+		return
+	}
+	// Only the bare form or the full "start end" form are valid — checked AFTER the
+	// lookup so a missing key is :0 and a wrong-type key is WRONGTYPE regardless.
+	if len(args) != 2 && len(args) != 4 {
+		w.Error(resp.ErrSyntax)
+		return
+	}
+	if len(cur) == 0 {
 		w.Int(0)
 		return
 	}
@@ -171,15 +176,19 @@ func (r *Router) handleBitCount(ctx context.Context, c *server.Conn, args [][]by
 // the first bit set to `bit`, following Redis' clear-bit-past-the-end semantics.
 func (r *Router) handleBitPos(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	if len(args) > 5 {
-		w.Error(resp.ErrSyntax)
+	// Redis parses the bit argument via string2ll BEFORE the key lookup: a
+	// non-integer (incl. a leading '+') is the not-an-integer error; a valid integer
+	// other than 0/1 is the bit-argument error.
+	bitLL, perr := ParseInt(args[2])
+	if perr != nil {
+		w.Error(resp.ErrNotInteger)
 		return
 	}
-	bit, ok := parseBitValue(args[2])
-	if !ok {
+	if bitLL != 0 && bitLL != 1 {
 		w.Error(errBitPosBit)
 		return
 	}
+	bit := int(bitLL)
 
 	cur, found, wrongType, err := r.readCurrentString(ctx, encodePK(c.DB(), args[1]))
 	if err != nil {
@@ -191,15 +200,22 @@ func (r *Router) handleBitPos(ctx context.Context, c *server.Conn, args [][]byte
 		return
 	}
 	if !found {
-		// Redis' bitposCommand replies for a MISSING key (a NULL object) at the very top:
-		// bit==0 -> 0 (an infinite run of zero bytes), bit==1 -> -1 — IGNORING any start/end.
-		// (An EXISTING empty string is different: it falls through to the empty-range path
-		// below and reports -1.)
+		// Redis' bitposCommand replies for a MISSING key (a NULL object) — BEFORE the
+		// arg-count validation below — bit==0 -> 0 (an infinite run of zero bytes),
+		// bit==1 -> -1, IGNORING any start/end. (An EXISTING empty string is different:
+		// it falls through to the empty-range path below and reports -1.)
 		if bit == 0 {
 			w.Int(0)
 		} else {
 			w.Int(-1)
 		}
+		return
+	}
+
+	// Arg-count validation happens AFTER the lookup (Redis' final else -> syntaxerr),
+	// so a missing key short-circuits above even with a surplus argument.
+	if len(args) > 5 {
+		w.Error(resp.ErrSyntax)
 		return
 	}
 
@@ -315,7 +331,10 @@ func (r *Router) handleBitOp(ctx context.Context, c *server.Conn, args [][]byte)
 // --- helpers ---------------------------------------------------------------
 
 func parseBitOffset(b []byte) (int64, bool) {
-	n, err := strconv.ParseInt(string(b), 10, 64)
+	// Redis getBitOffsetFromArgument parses the offset via string2ll, which rejects a
+	// leading '+' and leading zeros; ParseInt mirrors that. strconv.ParseInt would
+	// wrongly accept "+8"/"008".
+	n, err := ParseInt(b)
 	if err != nil || n < 0 || n >= maxBitOffset {
 		return 0, false
 	}
@@ -334,7 +353,10 @@ func parseBitValue(b []byte) (int, bool) {
 }
 
 func parseIntArg(b []byte) (int64, bool) {
-	n, err := strconv.ParseInt(string(b), 10, 64)
+	// BITCOUNT/BITPOS start/end parse via getLongFromObjectOrReply -> string2ll,
+	// which rejects a leading '+' and leading zeros. ParseInt mirrors that;
+	// strconv.ParseInt would wrongly accept "+0"/"007".
+	n, err := ParseInt(b)
 	return n, err == nil
 }
 

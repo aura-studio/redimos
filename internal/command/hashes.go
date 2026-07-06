@@ -641,6 +641,24 @@ func (r *Router) handleHScan(ctx context.Context, c *server.Conn, args [][]byte)
 		return
 	}
 
+	// Type / existence check BEFORE the option parse: Redis' hscanCommand does the
+	// lookup + checkType before scanGenericCommand parses MATCH/COUNT, so a live
+	// non-Hash key is WRONGTYPE and an absent/expired key replies the terminating
+	// ["0", []] — both regardless of a malformed MATCH/COUNT option.
+	_, live, wrongType, err := r.hashState(ctx, pk)
+	if err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	if wrongType {
+		w.Error(resp.ErrWrongType)
+		return
+	}
+	if !live {
+		writeHScanReply(c, "0", nil)
+		return
+	}
+
 	// Optional [MATCH pattern] [COUNT n] pairs, in any order.
 	var (
 		pattern  []byte
@@ -658,7 +676,8 @@ func (r *Router) handleHScan(ctx context.Context, c *server.Conn, args [][]byte)
 			pattern = opts[i+1]
 			hasMatch = true
 		case "COUNT":
-			n, err := strconv.Atoi(string(opts[i+1]))
+			// string2ll semantics (reject leading '+'/zeros), not strconv.Atoi.
+			n, err := ParseInt(opts[i+1])
 			if err != nil {
 				w.Error(resp.ErrNotInteger)
 				return
@@ -672,23 +691,6 @@ func (r *Router) handleHScan(ctx context.Context, c *server.Conn, args [][]byte)
 			w.Error(resp.ErrSyntax)
 			return
 		}
-	}
-
-	// Type / existence check via meta: a live non-Hash key is WRONGTYPE; an
-	// absent/expired key behaves as an empty hash and replies the terminating
-	// ["0", []].
-	_, live, wrongType, err := r.hashState(ctx, pk)
-	if err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
-	if wrongType {
-		w.Error(resp.ErrWrongType)
-		return
-	}
-	if !live {
-		writeHScanReply(c, "0", nil)
-		return
 	}
 
 	// Resolve the pagination token. Cursor 0 starts a fresh page (nil token); any

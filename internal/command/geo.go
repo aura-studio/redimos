@@ -12,7 +12,7 @@ package command
 
 import (
 	"context"
-	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,8 +26,82 @@ import (
 
 const errNotGeoFloat = "ERR value is not a valid float"
 
-// errGeoUnit matches Redis' reply for an unrecognised distance unit (geo.c).
-const errGeoUnit = "ERR unsupported unit provided. please use m, km, ft, mi"
+// GEO error strings copied byte-for-byte from Redis 3.2 geo.c.
+const (
+	// errGeoUnit is Redis' reply for an unrecognised distance unit.
+	errGeoUnit = "ERR unsupported unit provided. please use m, km, ft, mi"
+	// errGeoNeedRadius is extractDistanceOrReply's custom parse-failure message.
+	errGeoNeedRadius = "ERR need numeric radius"
+	// errGeoNegRadius is extractDistanceOrReply's negative-distance reply.
+	errGeoNegRadius = "ERR radius cannot be negative"
+	// errGeoCountPositive is the GEORADIUS COUNT<=0 reply.
+	errGeoCountPositive = "ERR COUNT must be > 0"
+	// errGeoAddSyntax is geoaddCommand's odd-argument-count reply (note the
+	// trailing space, present in the C string literal).
+	errGeoAddSyntax = "ERR syntax error. Try GEOADD key [x1] [y1] [name1] [x2] [y2] [name2] ... "
+)
+
+// geoInvalidPairErr formats Redis' "invalid longitude,latitude pair X,Y" using
+// C printf %.6f semantics — importantly rendering a non-finite coordinate as
+// "inf"/"-inf"/"nan" (C's %f), NOT Go's "+Inf"/"NaN".
+func geoInvalidPairErr(lon, lat float64) string {
+	return "ERR invalid longitude,latitude pair " + fmtGeoErrCoord(lon) + "," + fmtGeoErrCoord(lat)
+}
+
+func fmtGeoErrCoord(f float64) string {
+	switch {
+	case math.IsInf(f, 1):
+		return "inf"
+	case math.IsInf(f, -1):
+		return "-inf"
+	case math.IsNaN(f):
+		return "nan"
+	default:
+		return strconv.FormatFloat(f, 'f', 6, 64)
+	}
+}
+
+// parseGeoLongLat parses and range-checks a GEORADIUS query centre with Redis'
+// exact errors (extractLongLatOrReply): a non-float coordinate is
+// "value is not a valid float"; an out-of-range pair is the invalid-pair error.
+func parseGeoLongLat(w *resp.Writer, lonArg, latArg []byte) (lon, lat float64, ok bool) {
+	lon, ok = parseFloatArg(lonArg)
+	if !ok {
+		w.Error(errNotGeoFloat)
+		return 0, 0, false
+	}
+	lat, ok = parseFloatArg(latArg)
+	if !ok {
+		w.Error(errNotGeoFloat)
+		return 0, 0, false
+	}
+	if !validGeoCoord(lon, lat) {
+		w.Error(geoInvalidPairErr(lon, lat))
+		return 0, 0, false
+	}
+	return lon, lat, true
+}
+
+// parseGeoRadius parses a radius+unit pair with Redis' extractDistanceOrReply
+// error precedence: parse failure ("need numeric radius") -> negative
+// ("radius cannot be negative") -> bad unit. It returns radius in metres.
+func parseGeoRadius(w *resp.Writer, radiusArg, unitArg []byte) (radiusMeters, unit float64, ok bool) {
+	radius, rok := parseFloatArg(radiusArg)
+	if !rok {
+		w.Error(errGeoNeedRadius)
+		return 0, 0, false
+	}
+	if radius < 0 {
+		w.Error(errGeoNegRadius)
+		return 0, 0, false
+	}
+	u, uok := parseGeoUnit(unitArg)
+	if !uok {
+		w.Error(errGeoUnit)
+		return 0, 0, false
+	}
+	return radius * u, u, true
+}
 
 func (r *Router) registerGeo() {
 	r.reg("GEOADD", -5, true, r.handleGeoAdd)
@@ -71,7 +145,8 @@ func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte
 	key := args[1]
 	rest := args[2:]
 	if len(rest)%3 != 0 {
-		w.Error(resp.ErrSyntax)
+		// geoaddCommand replies a GEOADD-specific hint, not a generic syntax error.
+		w.Error(errGeoAddSyntax)
 		return
 	}
 
@@ -89,7 +164,7 @@ func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte
 			return
 		}
 		if !validGeoCoord(lon, lat) {
-			w.Error(fmt.Sprintf("ERR invalid longitude,latitude pair %.6f,%.6f", lon, lat))
+			w.Error(geoInvalidPairErr(lon, lat))
 			return
 		}
 		members = append(members, storage.ZMember{
@@ -245,7 +320,12 @@ type geoRadiusOptions struct {
 	sortDesc  bool
 }
 
-func parseGeoRadiusOptions(rest [][]byte) (geoRadiusOptions, bool) {
+// parseGeoRadiusOptions parses the trailing GEORADIUS options. It returns an empty
+// errText on success, or the exact Redis error body to reply. COUNT uses string2ll
+// semantics (getLongFromObjectOrReply): a non-integer is "value is not an integer
+// or out of range" and a non-positive value is "COUNT must be > 0"; a missing value
+// or an unknown token (incl. the unsupported STORE/STOREDIST) is a syntax error.
+func parseGeoRadiusOptions(rest [][]byte) (geoRadiusOptions, string) {
 	var o geoRadiusOptions
 	for i := 0; i < len(rest); i++ {
 		switch toLower(string(rest[i])) {
@@ -261,80 +341,71 @@ func parseGeoRadiusOptions(rest [][]byte) (geoRadiusOptions, bool) {
 			o.sortDesc = true
 		case "count":
 			if i+1 >= len(rest) {
-				return o, false
+				return o, resp.ErrSyntax
 			}
-			n, err := strconv.Atoi(string(rest[i+1]))
-			if err != nil || n <= 0 {
-				return o, false
+			n, err := ParseInt(rest[i+1])
+			if err != nil {
+				return o, resp.ErrNotInteger
 			}
-			o.count = n
+			if n <= 0 {
+				return o, errGeoCountPositive
+			}
+			o.count = int(n)
 			i++
 		default:
 			// STORE / STOREDIST and unknown tokens are not supported.
-			return o, false
+			return o, resp.ErrSyntax
 		}
 	}
-	return o, true
+	return o, ""
 }
 
 func (r *Router) handleGeoRadius(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	lon, ok := parseFloatArg(args[2])
-	if !ok {
-		w.Error(errNotGeoFloat)
+	pk := encodePK(c.DB(), args[1])
+	// Redis georadiusGeneric looks the key up FIRST: a missing key replies an empty
+	// array (*0) and a live wrong-type key replies WRONGTYPE — both BEFORE any
+	// coordinate/radius/option is parsed. Parsing errors are only reachable on a
+	// live GEO (zset) key.
+	live, done := r.geoWrongType(ctx, c, pk)
+	if done {
 		return
 	}
-	lat, ok := parseFloatArg(args[3])
-	if !ok {
-		w.Error(errNotGeoFloat)
-		return
-	}
-	radius, ok := parseFloatArg(args[4])
-	if !ok {
-		w.Error(errNotGeoFloat)
-		return
-	}
-	unit, ok := parseGeoUnit(args[5])
-	if !ok {
-		w.Error(errGeoUnit)
-		return
-	}
-	opts, ok := parseGeoRadiusOptions(args[6:])
-	if !ok {
-		w.Error(resp.ErrSyntax)
+	if !live {
+		c.Redcon().WriteRaw(resp.AppendArrayHeader(nil, 0))
 		return
 	}
 
-	pk := encodePK(c.DB(), args[1])
-	// An absent key yields an empty scan → geoRadiusReply writes *0, matching Redis.
-	if _, done := r.geoWrongType(ctx, c, pk); done {
+	lon, lat, ok := parseGeoLongLat(w, args[2], args[3])
+	if !ok {
 		return
 	}
-	r.geoRadiusReply(ctx, c, pk, lat, lon, radius*unit, unit, opts)
+	radiusMeters, unit, ok := parseGeoRadius(w, args[4], args[5])
+	if !ok {
+		return
+	}
+	opts, errText := parseGeoRadiusOptions(args[6:])
+	if errText != "" {
+		w.Error(errText)
+		return
+	}
+	r.geoRadiusReply(ctx, c, pk, lat, lon, radiusMeters, unit, opts)
 }
 
 func (r *Router) handleGeoRadiusByMember(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	radius, ok := parseFloatArg(args[3])
-	if !ok {
-		w.Error(errNotGeoFloat)
+	pk := encodePK(c.DB(), args[1])
+	// As GEORADIUS: lookup + type check first (missing -> *0, wrong type ->
+	// WRONGTYPE), then the member is decoded, then radius/unit, then options.
+	live, done := r.geoWrongType(ctx, c, pk)
+	if done {
 		return
 	}
-	unit, ok := parseGeoUnit(args[4])
-	if !ok {
-		w.Error(errGeoUnit)
-		return
-	}
-	opts, ok := parseGeoRadiusOptions(args[5:])
-	if !ok {
-		w.Error(resp.ErrSyntax)
+	if !live {
+		c.Redcon().WriteRaw(resp.AppendArrayHeader(nil, 0))
 		return
 	}
 
-	pk := encodePK(c.DB(), args[1])
-	if _, done := r.geoWrongType(ctx, c, pk); done {
-		return
-	}
 	lat, lon, found, err := r.memberPos(ctx, pk, string(args[2]))
 	if err != nil {
 		r.writeStoreError(c, err)
@@ -344,7 +415,16 @@ func (r *Router) handleGeoRadiusByMember(ctx context.Context, c *server.Conn, ar
 		w.Error("ERR could not decode requested zset member")
 		return
 	}
-	r.geoRadiusReply(ctx, c, pk, lat, lon, radius*unit, unit, opts)
+	radiusMeters, unit, ok := parseGeoRadius(w, args[3], args[4])
+	if !ok {
+		return
+	}
+	opts, errText := parseGeoRadiusOptions(args[5:])
+	if errText != "" {
+		w.Error(errText)
+		return
+	}
+	r.geoRadiusReply(ctx, c, pk, lat, lon, radiusMeters, unit, opts)
 }
 
 type geoResult struct {

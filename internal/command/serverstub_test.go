@@ -71,7 +71,10 @@ func TestPFDebugEncodingAndErrors(t *testing.T) {
 		{"PFDEBUG TODENSE hll", ":0"},
 		{"PFDEBUG DECODE hll", "-ERR HLL encoding is not sparse"},
 		{"PFDEBUG GETREG missing", "-ERR The specified key does not exist"},
-		{"PFDEBUG BOGUS hll", "-ERR Unknown PFDEBUG subcommand or wrong number of arguments for 'BOGUS'"},
+		// Redis 3.2 splits the two failures: an UNKNOWN subcommand echoes the name,
+		// a KNOWN subcommand with the wrong arity gets a distinct arity message.
+		{"PFDEBUG BOGUS hll", "-ERR Unknown PFDEBUG subcommand 'BOGUS'"},
+		{"PFDEBUG GETREG hll extra", "-ERR Wrong number of arguments for the 'GETREG' subcommand"},
 	}
 	for _, tc := range cases {
 		if got := sendRead(t, conn, r, tc.line); got != tc.want {

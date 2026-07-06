@@ -156,6 +156,17 @@ func (r *Router) handleSAdd(ctx context.Context, c *server.Conn, args [][]byte) 
 // were removed. cnt is decremented by that count, and the key is deleted when its
 // last member is removed (an empty set does not exist). An absent/expired key
 // replies ":0"; a live non-Set key replies WRONGTYPE.
+// maxStorableMemberLen is the largest collection member/field length redimos can
+// persist: a member's DynamoDB sort key is a 1-byte type prefix + the member bytes,
+// and DynamoDB caps a sort key at 1024 bytes, so a member longer than this can never
+// exist in a collection. No-op lookups/removals of such a member therefore behave as
+// "not present" (Redis imposes no such limit and would store/find it — an accepted
+// platform divergence on the WRITE path, doc §4.1). Without this short-circuit the
+// oversized sort key reaches DynamoDB and returns a misleading "backend error".
+const maxStorableMemberLen = 1024 - 1 // DynamoDB sort-key limit minus the 1-byte prefix
+
+func memberStorable(member []byte) bool { return len(member) <= maxStorableMemberLen }
+
 func (r *Router) handleSRem(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	pk := encodePK(c.DB(), args[1])
@@ -175,7 +186,17 @@ func (r *Router) handleSRem(ctx context.Context, c *server.Conn, args [][]byte) 
 		return
 	}
 
-	removed, err := r.Storage.Store.SRem(ctx, pk, bytesToStrings(members))
+	// A member too large to be stored can never be present, so it contributes 0 to the
+	// removal count (Redis finds it absent). Filter such members out before the store
+	// call so their oversized sort key never reaches the backend.
+	toRemove := make([]string, 0, len(members))
+	for _, m := range members {
+		if memberStorable(m) {
+			toRemove = append(toRemove, string(m))
+		}
+	}
+
+	removed, err := r.Storage.Store.SRem(ctx, pk, toRemove)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -205,6 +226,12 @@ func (r *Router) handleSIsMember(ctx context.Context, c *server.Conn, args [][]b
 		return
 	}
 	if !live {
+		w.Int(0)
+		return
+	}
+	// A member too large to be stored can never be in the set (its sort key would
+	// exceed DynamoDB's limit); report it absent rather than hitting the backend.
+	if !memberStorable(args[2]) {
 		w.Int(0)
 		return
 	}
@@ -458,6 +485,24 @@ func (r *Router) handleSScan(ctx context.Context, c *server.Conn, args [][]byte)
 		return
 	}
 
+	// Type / existence check BEFORE the option parse: Redis' sscanCommand does the
+	// lookup + checkType before scanGenericCommand parses MATCH/COUNT, so a live
+	// non-Set key is WRONGTYPE and an absent/expired key replies the terminating
+	// ["0", []] — both regardless of a malformed MATCH/COUNT option.
+	_, live, wrongType, err := r.setState(ctx, pk)
+	if err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	if wrongType {
+		w.Error(resp.ErrWrongType)
+		return
+	}
+	if !live {
+		writeSScanReply(c, "0", nil)
+		return
+	}
+
 	// Optional [MATCH pattern] [COUNT n] pairs, in any order.
 	var (
 		pattern  []byte
@@ -475,7 +520,8 @@ func (r *Router) handleSScan(ctx context.Context, c *server.Conn, args [][]byte)
 			pattern = opts[i+1]
 			hasMatch = true
 		case "COUNT":
-			n, err := strconv.Atoi(string(opts[i+1]))
+			// string2ll semantics (reject leading '+'/zeros), not strconv.Atoi.
+			n, err := ParseInt(opts[i+1])
 			if err != nil {
 				w.Error(resp.ErrNotInteger)
 				return
@@ -489,23 +535,6 @@ func (r *Router) handleSScan(ctx context.Context, c *server.Conn, args [][]byte)
 			w.Error(resp.ErrSyntax)
 			return
 		}
-	}
-
-	// Type / existence check via meta: a live non-Set key is WRONGTYPE; an
-	// absent/expired key behaves as an empty set and replies the terminating
-	// ["0", []].
-	_, live, wrongType, err := r.setState(ctx, pk)
-	if err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
-	if wrongType {
-		w.Error(resp.ErrWrongType)
-		return
-	}
-	if !live {
-		writeSScanReply(c, "0", nil)
-		return
 	}
 
 	// Resolve the pagination token. Cursor 0 starts a fresh page (nil token); any
@@ -855,6 +884,12 @@ func (r *Router) handleSMove(ctx context.Context, c *server.Conn, args [][]byte)
 	// key (delete-on-empty) and rebuild it, dropping its TTL. (t_set.c: `if (srcset ==
 	// dstset) { addReply(ismember ? cone : czero); return; }`.)
 	if srcPK == dstPK {
+		// A member too large to be stored is never present → :0 (Redis: setTypeIsMember
+		// on the same source/dest set).
+		if !memberStorable(member) {
+			w.Int(0)
+			return
+		}
 		isMember, err := r.Storage.Store.SIsMember(ctx, srcPK, string(member))
 		if err != nil {
 			r.writeStoreError(c, err)
@@ -872,6 +907,13 @@ func (r *Router) handleSMove(ctx context.Context, c *server.Conn, args [][]byte)
 		return
 	} else if dstWrong {
 		w.Error(resp.ErrWrongType)
+		return
+	}
+
+	// A member too large to be stored can never be in the source set → nothing to
+	// move → :0 (checked AFTER the destination type check, matching Redis' order).
+	if !memberStorable(member) {
+		w.Int(0)
 		return
 	}
 

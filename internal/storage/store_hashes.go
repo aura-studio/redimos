@@ -77,8 +77,10 @@ func (s *redimoStore) HMGet(ctx context.Context, pk string, fields []string) (ma
 }
 
 func (s *redimoStore) HGetAll(ctx context.Context, pk string) ([]HField, error) {
-	// The fork's HGETALL queries the whole partition, which includes the reserved
-	// meta item; filter it out so it is never surfaced as a field.
+	// The fork's HGETALL already excludes the reserved meta item BY ITS SORT-KEY
+	// PREFIX (0x02), so a user field literally named "#meta" (stored under the member
+	// prefix 0x01) IS returned. We must NOT additionally filter by the decoded string
+	// "#meta" here — that would drop the legitimate field (Redis keeps it).
 	all, err := s.client.WithContext(ctx).HGETALL(pk)
 	if err != nil {
 		return nil, err
@@ -86,9 +88,6 @@ func (s *redimoStore) HGetAll(ctx context.Context, pk string) ([]HField, error) 
 
 	out := make([]HField, 0, len(all))
 	for field, rv := range all {
-		if field == redimo.MetaSK {
-			continue
-		}
 		out = append(out, HField{Field: field, Value: rv.Bytes()})
 	}
 

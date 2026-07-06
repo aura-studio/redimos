@@ -11,7 +11,6 @@ package command
 import (
 	"context"
 	"math/big"
-	"strconv"
 	"strings"
 
 	"github.com/aura-studio/redimos/v2/internal/guard"
@@ -165,10 +164,15 @@ func parseBitfieldOps(toks [][]byte) ([]bitfieldOp, string) {
 			if !ok {
 				return nil, errBitOffset
 			}
-			val, ok := new(big.Int).SetString(string(toks[i+3]), 10)
-			if !ok {
+			// Redis parses the SET value / INCRBY increment via getLongLongFromObjectOrReply
+			// -> string2ll: an int64. big.Int.SetString would accept a leading '+' and an
+			// arbitrary-precision magnitude that string2ll rejects (silently wrapping an
+			// int64-overflowing value), so parse strictly and widen to big.Int.
+			n, perr := ParseInt(toks[i+3])
+			if perr != nil {
 				return nil, resp.ErrNotInteger
 			}
+			val := big.NewInt(n)
 			ops = append(ops, bitfieldOp{kind: kind, signed: signed, nbits: nbits, offset: off, arg: val, overflow: overflow})
 			i += 4
 		default:
@@ -192,10 +196,14 @@ func parseBitfieldType(tok []byte) (signed bool, nbits int, ok bool) {
 	default:
 		return false, 0, false
 	}
-	n, err := strconv.Atoi(string(tok[1:]))
+	// Redis getBitfieldTypeFromArgument parses the width via string2ll, which rejects
+	// a leading '+' and leading zeros ("u08"/"u+8" are invalid types); strconv.Atoi
+	// would wrongly accept them.
+	n64, err := ParseInt(tok[1:])
 	if err != nil {
 		return false, 0, false
 	}
+	n := int(n64)
 	if signed {
 		if n < 1 || n > 64 {
 			return false, 0, false
@@ -209,9 +217,10 @@ func parseBitfieldType(tok []byte) (signed bool, nbits int, ok bool) {
 }
 
 func parseBitfieldOffset(tok []byte, nbits int) (int64, bool) {
-	s := string(tok)
-	if strings.HasPrefix(s, "#") {
-		idx, err := strconv.ParseInt(s[1:], 10, 64)
+	// Redis getBitOffsetFromArgument parses the offset (and the "#n" field index) via
+	// string2ll, which rejects a leading '+' and leading zeros; ParseInt mirrors that.
+	if len(tok) > 0 && tok[0] == '#' {
+		idx, err := ParseInt(tok[1:])
 		if err != nil || idx < 0 {
 			return 0, false
 		}
@@ -226,7 +235,7 @@ func parseBitfieldOffset(tok []byte, nbits int) (int64, bool) {
 		}
 		return off, true
 	}
-	off, err := strconv.ParseInt(s, 10, 64)
+	off, err := ParseInt(tok)
 	// Bound offset+width at maxBitOffset (2^32), matching SETBIT; an unbounded offset let bfSet
 	// grow the value to terabytes (OOM) before the write-size guard ran.
 	if err != nil || off < 0 || off+int64(nbits) > maxBitOffset {

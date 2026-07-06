@@ -136,9 +136,9 @@ func (r *Router) zRangeByLex(ctx context.Context, c *server.Conn, args [][]byte,
 	}
 
 	// Optional "LIMIT offset count" trailer (Redis 3.2).
-	offset, count, ok := parseLexLimit(args[4:])
-	if !ok {
-		w.Error(resp.ErrSyntax)
+	offset, count, errText := parseLexLimit(args[4:])
+	if errText != "" {
+		w.Error(errText)
 		return
 	}
 
@@ -180,24 +180,30 @@ func (r *Router) zRangeByLex(ctx context.Context, c *server.Conn, args [][]byte,
 }
 
 // parseLexLimit parses the optional "LIMIT offset count" trailer of the
-// ZRANGEBYLEX family. No trailer means (0, -1) = "all"; any other shape is a
-// syntax error.
-func parseLexLimit(rest [][]byte) (offset, count int, ok bool) {
+// ZRANGEBYLEX family. No trailer means (0, -1) = "all". errText is "" on success;
+// otherwise it is the exact Redis error body. Mirroring genericZrangebylexCommand:
+// a LIMIT clause matches only when >=3 tokens remain and the first is "limit", and
+// the offset/count are parsed via string2ll (a non-integer is the not-an-integer
+// error) BEFORE any surplus tokens are rejected as a syntax error.
+func parseLexLimit(rest [][]byte) (offset, count int, errText string) {
 	if len(rest) == 0 {
-		return 0, -1, true
+		return 0, -1, ""
 	}
-	if len(rest) != 3 || !strings.EqualFold(string(rest[0]), "LIMIT") {
-		return 0, 0, false
+	if len(rest) < 3 || !strings.EqualFold(string(rest[0]), "LIMIT") {
+		return 0, 0, resp.ErrSyntax
 	}
 	o, err := ParseInt(rest[1])
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, resp.ErrNotInteger
 	}
 	n, err := ParseInt(rest[2])
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, resp.ErrNotInteger
 	}
-	return int(o), int(n), true
+	if len(rest) != 3 {
+		return 0, 0, resp.ErrSyntax
+	}
+	return int(o), int(n), ""
 }
 
 // applyZLimit applies a Redis LIMIT offset/count window to an ordered member

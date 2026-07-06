@@ -66,7 +66,10 @@ func (r *Router) handleScan(ctx context.Context, c *server.Conn, args [][]byte) 
 			pattern = opts[i+1]
 			hasMatch = true
 		case "COUNT":
-			n, err := strconv.Atoi(string(opts[i+1]))
+			// Redis parses COUNT via getLongFromObjectOrReply -> string2ll, which
+			// rejects a leading '+' and leading zeros; ParseInt mirrors that exactly.
+			// strconv.Atoi would wrongly accept "+5"/"007".
+			n, err := ParseInt(opts[i+1])
 			if err != nil {
 				w.Error(resp.ErrNotInteger)
 				return

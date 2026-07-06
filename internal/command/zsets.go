@@ -149,30 +149,49 @@ const errScoreNotFinite = "ERR score must be a finite number"
 // ZINCRBY). It rejects an unparseable float exactly as Redis does (errNotValidFloat)
 // and, unlike parseScore, also rejects a non-finite ±inf value with errScoreNotFinite
 // (see above). errText is "" on success.
-// dynamoNumberMaxMagnitude is the largest magnitude DynamoDB's Number type can hold
-// (its domain is ~1e-130 .. 9.9999…e+125, 38 significant digits, no inf/NaN). A score
-// whose magnitude exceeds this is a perfectly valid IEEE-754 double that Redis accepts
-// but redimos cannot persist as the item's numeric sort attribute.
-const dynamoNumberMaxMagnitude = 9.9999999999999999999999999999999999999e+125
+// dynamoNumberMaxMagnitude / dynamoNumberMinMagnitude bound the magnitudes DynamoDB's
+// Number type can hold (its domain is 1e-130 .. 9.9999…e+125, 38 significant digits,
+// no inf/NaN). A finite score OUTSIDE this band — too large (1e130) OR too small in
+// magnitude but non-zero (1e-200) — is a perfectly valid IEEE-754 double that Redis
+// accepts but redimos cannot persist as the item's numeric sort attribute.
+const (
+	dynamoNumberMaxMagnitude = 9.9999999999999999999999999999999999999e+125
+	dynamoNumberMinMagnitude = 1e-130
+)
 
-// errScoreOutOfRange is redimos' reply for a FINITE score whose magnitude exceeds the
-// DynamoDB Number domain (e.g. 1e130, 1e308). Redis stores these as ordinary doubles;
-// redimos cannot, so — like the ±inf case — it rejects them deterministically up front
-// rather than letting the write reach the backend, which returned a misleading "backend
-// error, retry later" AND, in a multi-member ZADD, left already-written members behind
-// without incrementing meta.cnt (a torn ZCARD/contents state). See doc §4.1.
+// errScoreOutOfRange is redimos' reply for a FINITE score whose magnitude falls
+// outside the DynamoDB Number domain (e.g. 1e130 above, or 1e-200 below the floor).
+// Redis stores these as ordinary doubles; redimos cannot, so — like the ±inf case —
+// it rejects them deterministically up front rather than letting the write reach the
+// backend, which returned a misleading "backend error, retry later" AND, in a
+// multi-member ZADD or a *STORE, left a torn/half-wiped result behind. See doc §4.1.
 const errScoreOutOfRange = "ERR value is out of range"
+
+// checkScoreDomain reports the deterministic rejection message for a score redimos
+// cannot persist (non-finite, or a finite magnitude outside the DynamoDB Number
+// domain), or "" when the score is storable. Used both for a directly-supplied score
+// (storeScore) and for a computed result score (ZUNIONSTORE/ZINTERSTORE), so an
+// out-of-domain result is rejected BEFORE any destructive write rather than tearing.
+func checkScoreDomain(f float64) string {
+	if math.IsInf(f, 0) {
+		return errScoreNotFinite
+	}
+	if f != 0 && math.Abs(f) < dynamoNumberMinMagnitude {
+		return errScoreOutOfRange
+	}
+	if math.Abs(f) > dynamoNumberMaxMagnitude {
+		return errScoreOutOfRange
+	}
+	return ""
+}
 
 func storeScore(arg []byte) (score float64, errText string) {
 	f, ok := parseScore(arg)
 	if !ok {
 		return 0, errNotValidFloat
 	}
-	if math.IsInf(f, 0) {
-		return 0, errScoreNotFinite
-	}
-	if math.Abs(f) > dynamoNumberMaxMagnitude {
-		return 0, errScoreOutOfRange
+	if e := checkScoreDomain(f); e != "" {
+		return 0, e
 	}
 	return f, ""
 }
@@ -180,6 +199,13 @@ func storeScore(arg []byte) (score float64, errText string) {
 // parseScoreBound parses a ZRANGEBYSCORE / ZCOUNT bound: a leading '(' selects the
 // exclusive (open) interval, and the remainder is a float accepting inf/-inf/+inf.
 // ok=false signals the min-or-max-not-a-float reply.
+//
+// Redis parses a range bound with zslParseRange, which uses RAW strtod — this SKIPS
+// leading ASCII whitespace ("ZRANGEBYSCORE k \" 1\" 5" treats " 1" as 1.0), unlike
+// getDoubleFromObject (used for ZADD scores) which rejects a leading space. It still
+// requires the number to consume the rest of the string, so trailing junk ("1 ") is
+// rejected. An all-whitespace bound is left unconsumed by strtod and rejected — it
+// must NOT collapse into parseScore's empty-string-is-0 special case.
 func parseScoreBound(arg []byte) (storage.ScoreBound, bool) {
 	exclusive := false
 	if len(arg) > 0 && arg[0] == '(' {
@@ -187,12 +213,33 @@ func parseScoreBound(arg []byte) (storage.ScoreBound, bool) {
 		arg = arg[1:]
 	}
 
-	f, ok := parseScore(arg)
+	trimmed := trimLeadingSpace(arg)
+	if len(trimmed) == 0 && len(arg) != 0 {
+		// arg was all whitespace: strtod consumes nothing, eptr != end -> error.
+		return storage.ScoreBound{}, false
+	}
+
+	f, ok := parseScore(trimmed)
 	if !ok {
 		return storage.ScoreBound{}, false
 	}
 
 	return storage.ScoreBound{Value: f, Exclusive: exclusive}, true
+}
+
+// trimLeadingSpace drops the leading ASCII whitespace strtod skips (space, tab, and
+// the vertical-tab/form-feed/newline/carriage-return family).
+func trimLeadingSpace(b []byte) []byte {
+	i := 0
+	for i < len(b) {
+		switch b[i] {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			i++
+		default:
+			return b[i:]
+		}
+	}
+	return b[i:]
 }
 
 // formatScore renders a score the way Redis formats ZSCORE / ZINCRBY / WITHSCORES
@@ -333,6 +380,24 @@ func (r *Router) handleZScan(ctx context.Context, c *server.Conn, args [][]byte)
 		return
 	}
 
+	// Type / existence check BEFORE the option parse: Redis' zscanCommand does the
+	// lookup + checkType before scanGenericCommand parses MATCH/COUNT, so a live
+	// non-ZSet key is WRONGTYPE and an absent/expired key replies the terminating
+	// ["0", []] — both regardless of a malformed MATCH/COUNT option.
+	_, live, wrongType, err := r.zsetState(ctx, pk)
+	if err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	if wrongType {
+		w.Error(resp.ErrWrongType)
+		return
+	}
+	if !live {
+		writeZScanReply(c, "0", nil)
+		return
+	}
+
 	// Optional [MATCH pattern] [COUNT n] pairs, in any order.
 	var (
 		pattern  []byte
@@ -350,7 +415,8 @@ func (r *Router) handleZScan(ctx context.Context, c *server.Conn, args [][]byte)
 			pattern = opts[i+1]
 			hasMatch = true
 		case "COUNT":
-			n, err := strconv.Atoi(string(opts[i+1]))
+			// string2ll semantics (reject leading '+'/zeros), not strconv.Atoi.
+			n, err := ParseInt(opts[i+1])
 			if err != nil {
 				w.Error(resp.ErrNotInteger)
 				return
@@ -364,23 +430,6 @@ func (r *Router) handleZScan(ctx context.Context, c *server.Conn, args [][]byte)
 			w.Error(resp.ErrSyntax)
 			return
 		}
-	}
-
-	// Type / existence check via meta: a live non-ZSet key is WRONGTYPE; an
-	// absent/expired key behaves as an empty sorted set and replies the terminating
-	// ["0", []].
-	_, live, wrongType, err := r.zsetState(ctx, pk)
-	if err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
-	if wrongType {
-		w.Error(resp.ErrWrongType)
-		return
-	}
-	if !live {
-		writeZScanReply(c, "0", nil)
-		return
 	}
 
 	// Resolve the pagination token. Cursor 0 starts a fresh page (nil token); any

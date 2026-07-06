@@ -190,9 +190,10 @@ var configDefaults = map[string]string{
 // handleConfig implements the CONFIG probe (requirement 19.3). CONFIG GET
 // <param> returns a 2-element array [param, value] for a known default (e.g.
 // CONFIG GET maxmemory -> ["maxmemory", "0"]) and the empty array "*0" for an
-// unknown parameter or a missing parameter argument. CONFIG SET replies "+OK"
-// (the write is accepted and discarded — redimos has no mutable runtime config).
-// Any other subcommand also replies "+OK" as a minimal fallback.
+// unknown parameter or a missing parameter argument. CONFIG SET / RESETSTAT /
+// REWRITE reply "+OK" (accepted and discarded — redimos has no mutable runtime
+// config). Any UNKNOWN subcommand replies the exact Redis subcommand error, since
+// Redis' configCommand only recognises GET/SET/RESETSTAT/REWRITE.
 func handleConfig(_ context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	switch toLower(string(args[1])) {
@@ -208,8 +209,10 @@ func handleConfig(_ context.Context, c *server.Conn, args [][]byte) {
 			return
 		}
 		w.BulkArray([][]byte{[]byte(param), []byte(val)})
-	default: // set and every other subcommand
+	case "set", "resetstat", "rewrite":
 		w.SimpleString("OK")
+	default:
+		w.Error("ERR CONFIG subcommand must be one of GET, SET, RESETSTAT, REWRITE")
 	}
 }
 

@@ -23,50 +23,77 @@ type setOptions struct {
 // not-an-integer, or invalid-expire-time) and the options are unusable.
 //
 // Recognized tokens (case-insensitive): EX <seconds>, PX <milliseconds>, NX, XX.
-// EX and PX are mutually exclusive, as are NX and XX; a repeated or conflicting
-// option, an unknown token, or a missing EX/PX value is a syntax error. A
-// non-integer EX/PX value is the not-an-integer error; a non-positive value is
-// the invalid-expire-time error.
+// The parse mirrors Redis 3.2's setCommand loose loop, which is more permissive
+// than a strict "each option at most once":
+//
+//   - NX matches unless XX is already set; XX matches unless NX is already set.
+//     A REPEATED NX (or XX) is therefore idempotent and accepted (SET k v NX NX
+//     -> +OK), not a syntax error.
+//   - EX matches unless PX is already set; PX matches unless EX is already set. A
+//     repeated EX/PX of the SAME unit is accepted with LAST value winning
+//     (SET k v EX 10 EX 20 -> TTL 20); the conflicting unit is a syntax error.
+//   - The EX/PX VALUE is validated only ONCE, after the loop, against the final
+//     surviving token — so SET k v EX abc EX 10 succeeds (Redis never validates
+//     the shadowed "abc").
+//
+// An unknown token or a missing EX/PX value is a syntax error; a non-integer
+// final EX/PX value is the not-an-integer error; a non-positive one is the
+// invalid-expire-time error.
 func parseSetOptions(opts [][]byte, now int64) (setOptions, string) {
 	var o setOptions
+	var (
+		haveExp   bool
+		expMillis bool
+		expToken  []byte
+	)
 
 	for i := 0; i < len(opts); i++ {
 		switch toLower(string(opts[i])) {
 		case "nx":
-			if o.xx || o.nx {
+			if o.xx {
 				return setOptions{}, resp.ErrSyntax
 			}
 			o.nx = true
 		case "xx":
-			if o.nx || o.xx {
+			if o.nx {
 				return setOptions{}, resp.ErrSyntax
 			}
 			o.xx = true
 		case "ex", "px":
 			isMillis := toLower(string(opts[i])) == "px"
-			if o.expSet || i+1 >= len(opts) {
+			// Conflicting unit already set, or no value follows -> syntax error
+			// (Redis: the branch condition !(other unit) && next is false, so it
+			// falls through to the syntax-error default). A same-unit repeat is
+			// allowed and simply overrides the pending token below.
+			if (haveExp && expMillis != isMillis) || i+1 >= len(opts) {
 				return setOptions{}, resp.ErrSyntax
 			}
-			n, err := ParseInt(opts[i+1])
-			if err != nil {
-				return setOptions{}, resp.ErrNotInteger
-			}
-			if n <= 0 {
-				return setOptions{}, resp.ErrInvalidExpireTime("set")
-			}
-			o.expSet = true
-			if isMillis {
-				// Absolute expiry in epoch seconds. Sub-second precision is not
-				// stored (Pika v3.2.2 has none), but a positive sub-second PX must
-				// not instant-delete the key, and a huge PX must not overflow into a
-				// bogus permanent/negative-TTL key — msExpiryEpoch handles both.
-				o.expEpoch = msExpiryEpoch(now, n)
-			} else {
-				o.expEpoch = secExpiryEpoch(now, n)
-			}
+			haveExp = true
+			expMillis = isMillis
+			expToken = opts[i+1]
 			i++ // consume the value argument.
 		default:
 			return setOptions{}, resp.ErrSyntax
+		}
+	}
+
+	if haveExp {
+		n, err := ParseInt(expToken)
+		if err != nil {
+			return setOptions{}, resp.ErrNotInteger
+		}
+		if n <= 0 {
+			return setOptions{}, resp.ErrInvalidExpireTime("set")
+		}
+		o.expSet = true
+		if expMillis {
+			// Absolute expiry in epoch seconds. Sub-second precision is not stored
+			// (Pika v3.2.2 has none), but a positive sub-second PX must not
+			// instant-delete the key, and a huge PX must not overflow into a bogus
+			// permanent/negative-TTL key — msExpiryEpoch handles both.
+			o.expEpoch = msExpiryEpoch(now, n)
+		} else {
+			o.expEpoch = secExpiryEpoch(now, n)
 		}
 	}
 

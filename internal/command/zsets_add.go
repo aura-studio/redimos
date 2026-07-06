@@ -44,13 +44,15 @@ flags:
 			break flags
 		}
 	}
-	if flags.nx && flags.xx {
-		return flags, i, errZaddNxXx
-	}
+	// Redis zaddGenericCommand validates the score/member PAIR COUNT (even and
+	// non-empty) BEFORE the NX/XX incompatibility, so "ZADD k NX XX" (no pairs) replies
+	// a syntax error, not the NX/XX-conflict error.
 	pairs := rest[i:]
-	// score/member pairs => the argument count after the flags must be even and non-empty.
 	if len(pairs) == 0 || len(pairs)%2 != 0 {
 		return flags, i, resp.ErrSyntax
+	}
+	if flags.nx && flags.xx {
+		return flags, i, errZaddNxXx
 	}
 	if flags.incr && len(pairs) != 2 {
 		return flags, i, errZaddIncr
@@ -138,6 +140,28 @@ func (r *Router) zaddFastPath(ctx context.Context, c *server.Conn, w *resp.Write
 func (r *Router) zaddFlagPath(ctx context.Context, c *server.Conn, w *resp.Writer, key []byte, pk string, flags zaddFlags, pairs [][]byte) {
 	nx, xx, ch := flags.nx, flags.xx, flags.ch
 
+	// Redis zaddGenericCommand parses ALL scores up front (a bad score errors before
+	// anything else), THEN looks up the key and rejects a live wrong-type key with
+	// WRONGTYPE — both of which precede the per-pair NX/XX gating. Mirror that order
+	// so ZADD k XX 1 a on a live non-zset key replies WRONGTYPE (not :0), while a bad
+	// score still wins over the type error.
+	parsed := make([]float64, len(pairs)/2)
+	for j := 0; j < len(pairs); j += 2 {
+		score, errText := storeScore(pairs[j])
+		if errText != "" {
+			w.Error(errText)
+			return
+		}
+		parsed[j/2] = score
+	}
+	if _, _, wrongType, err := r.zsetState(ctx, pk); err != nil {
+		r.writeStoreError(c, err)
+		return
+	} else if wrongType {
+		w.Error(resp.ErrWrongType)
+		return
+	}
+
 	scoreOf := make(map[string]float64, len(pairs)/2)
 	hasMember := make(map[string]bool, len(pairs)/2)
 	loaded := make(map[string]bool, len(pairs)/2)
@@ -147,11 +171,7 @@ func (r *Router) zaddFlagPath(ctx context.Context, c *server.Conn, w *resp.Write
 	added, changed := 0, 0
 
 	for j := 0; j < len(pairs); j += 2 {
-		score, errText := storeScore(pairs[j])
-		if errText != "" {
-			w.Error(errText)
-			return
-		}
+		score := parsed[j/2]
 		mb := pairs[j+1]
 		m := string(mb)
 		if !loaded[m] {
@@ -225,6 +245,17 @@ func (r *Router) zaddIncr(ctx context.Context, c *server.Conn, w *resp.Writer, k
 	member := pairs[1]
 	if err := guard.CheckWrite(key, [][]byte{member}, nil); err != nil {
 		r.writeStoreError(c, err)
+		return
+	}
+	// Type check before NX/XX gating (Redis checks the key type right after lookup,
+	// before the XX-on-missing short-circuit), so ZADD k XX INCR 1 a on a live
+	// non-zset key replies WRONGTYPE rather than a nil bulk. The score was already
+	// parsed above, preserving Redis' float-error-before-WRONGTYPE precedence.
+	if _, _, wrongType, err := r.zsetState(ctx, pk); err != nil {
+		r.writeStoreError(c, err)
+		return
+	} else if wrongType {
+		w.Error(resp.ErrWrongType)
 		return
 	}
 	if nx || xx {

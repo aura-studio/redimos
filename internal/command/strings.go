@@ -619,19 +619,32 @@ func (r *Router) incrBy(ctx context.Context, c *server.Conn, key []byte, delta i
 func (r *Router) handleIncrByFloat(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 
+	key := args[1]
+	pk := encodePK(c.DB(), key)
+
+	// Redis' incrbyfloatCommand runs checkType right after the key lookup — BEFORE
+	// parsing the increment — so a live wrong-type key replies WRONGTYPE even when the
+	// increment is not a valid float. A non-creating readCurrentString gives that
+	// ordering (ensureTypeExpiring below would create the key, which must not happen
+	// on a missing key with a bad increment).
+	if _, _, wrongType, err := r.readCurrentString(ctx, pk); err != nil {
+		r.writeStoreError(c, err)
+		return
+	} else if wrongType {
+		w.Error(resp.ErrWrongType)
+		return
+	}
+
 	delta, ok := parseFloatArg(args[2])
 	if !ok {
 		w.Error(resp.ErrNotValidFloat)
 		return
 	}
 
-	key := args[1]
 	if err := guard.CheckWrite(key, nil, nil); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
-
-	pk := encodePK(c.DB(), key)
 
 	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 		r.writeStoreError(c, err)

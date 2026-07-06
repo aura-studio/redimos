@@ -4,8 +4,6 @@ import (
 	"context"
 	"math"
 	"math/rand"
-
-	redimo "github.com/aura-studio/redimo/v2"
 )
 
 // --- Set data operations (task 14.1) ---------------------------------------
@@ -13,9 +11,9 @@ import (
 // Members are DynamoDB sort keys, so they are string-typed. The fork's SADD /
 // SREM report which members were actually added / removed (via ReturnValue
 // ALL_OLD), whose lengths are the net cnt deltas the caller applies to meta.
-// Whole-partition reads (SMEMBERS) include the reserved meta item (sk ==
-// redimo.MetaSK); it is filtered out here so it is never surfaced as a member.
-// SPop / SRandMember build on the filtered member list and select in-process so
+// Whole-partition reads (SMEMBERS) already exclude the reserved meta item by its
+// sort-key PREFIX inside the fork, so a user member literally named "#meta" is kept.
+// SPop / SRandMember build on the member list and select in-process so
 // the reserved item can never be popped or returned, and so Redis' count
 // semantics (distinct vs with-repeats) are honoured exactly.
 
@@ -55,20 +53,17 @@ func (s *redimoStore) SIsMember(ctx context.Context, pk, member string) (bool, e
 }
 
 func (s *redimoStore) SMembers(ctx context.Context, pk string) ([]string, error) {
-	// The fork's SMEMBERS queries the whole partition, which includes the reserved
-	// meta item; filter it out so it is never surfaced as a member.
+	// The fork's SMEMBERS already excludes the reserved meta item BY ITS SORT-KEY
+	// PREFIX (0x02), so a user member literally named "#meta" (stored under the member
+	// prefix 0x01) IS returned. We must NOT additionally filter by the decoded string
+	// "#meta" here — that would drop the legitimate member (Redis keeps it).
 	all, err := s.client.WithContext(ctx).SMEMBERS(pk)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]string, 0, len(all))
-	for _, m := range all {
-		if m == redimo.MetaSK {
-			continue
-		}
-		out = append(out, m)
-	}
+	out = append(out, all...)
 
 	return out, nil
 }
