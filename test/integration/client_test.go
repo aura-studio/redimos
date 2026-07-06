@@ -117,6 +117,41 @@ func (c *respConn) do(args ...[]byte) []byte {
 	return reply
 }
 
+// raw sends payload VERBATIM (an inline command "GET k\r\n", a hand-framed array, a
+// zero-length bulk, an odd-cased command, a malformed frame, ...) and returns the raw
+// bytes of ONE reply. It is the wire-level counterpart to do() for dimension Q, where
+// do()'s canonical array framing cannot express the input under test. Binary-safe.
+func (c *respConn) raw(payload []byte) []byte {
+	_ = c.conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := c.conn.Write(payload); err != nil {
+		return []byte("WRITE-ERR: " + err.Error())
+	}
+	reply, err := readReply(c.r)
+	if err != nil {
+		return []byte("READ-ERR: " + err.Error())
+	}
+	return reply
+}
+
+// rawReplies sends payload verbatim (typically several commands in one write) and reads
+// n replies, concatenating their raw bytes so the comparison covers pipelining reply
+// ORDER and framing, not just individual replies.
+func (c *respConn) rawReplies(payload []byte, n int) []byte {
+	_ = c.conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := c.conn.Write(payload); err != nil {
+		return []byte("WRITE-ERR: " + err.Error())
+	}
+	var out []byte
+	for i := 0; i < n; i++ {
+		reply, err := readReply(c.r)
+		if err != nil {
+			return append(out, []byte("READ-ERR: "+err.Error())...)
+		}
+		out = append(out, reply...)
+	}
+	return out
+}
+
 // bulkPayload extracts the payload of a `$<n>\r\n<payload>\r\n` bulk-string reply,
 // or reports !ok for a null bulk ($-1) or a non-bulk reply. It is how the charset
 // test recovers the exact bytes a GET/LINDEX/HGET returned.

@@ -132,6 +132,53 @@ func intReply(reply []byte) (int64, bool) {
 	return n, err == nil
 }
 
+// --- Dimension Q: RESP2 wire-protocol parity ---------------------------------
+//
+// eqRaw/eqPipeline/eqRawFresh send a VERBATIM wire payload (an inline command, a
+// hand-framed array, a zero-length bulk, an odd-cased command name, a malformed frame)
+// that d.eq's canonical array framing cannot express, and byte-compare the reply against
+// Redis 3.2. This is the wire layer the A-P dimensions never exercise.
+
+// eqRaw sends payload verbatim on the shared connections and compares ONE reply. Use for
+// WELL-FORMED wire inputs that leave the connection usable (inline commands, zero-length
+// bulks, case variants) — NOT protocol errors, which may desync/close the connection.
+func (d *differ) eqRaw(desc string, payload []byte) {
+	d.n++
+	rp := d.p.raw(payload)
+	ro := d.o.raw(payload)
+	if !bytes.Equal(rp, ro) {
+		d.t.Errorf("%s\n  payload=%q\n  proxy =%q\n  oracle=%q", desc, payload, rp, ro)
+	}
+}
+
+// eqPipeline sends payload (several commands in one write) and compares the n concatenated
+// replies — verifying pipelining reply ORDER + framing parity.
+func (d *differ) eqPipeline(desc string, payload []byte, n int) {
+	d.n++
+	rp := d.p.rawReplies(payload, n)
+	ro := d.o.rawReplies(payload, n)
+	if !bytes.Equal(rp, ro) {
+		d.t.Errorf("%s (pipeline x%d)\n  payload=%q\n  proxy =%q\n  oracle=%q", desc, n, payload, rp, ro)
+	}
+}
+
+// eqRawFresh is eqRaw on a FRESH connection per endpoint (dialed and discarded), for
+// PROTOCOL-ERROR inputs: Redis replies "-ERR Protocol error: ..." and then CLOSES the
+// connection, so a shared connection would be poisoned for later cases. Comparing the
+// single error reply on a throwaway connection isolates the blast radius.
+func (d *differ) eqRawFresh(desc string, payload []byte) {
+	d.n++
+	pp := dial(d.t, proxyAddr(d.t))
+	oo := dial(d.t, oracleAddr(d.t))
+	rp := pp.raw(payload)
+	ro := oo.raw(payload)
+	_ = pp.conn.Close()
+	_ = oo.conn.Close()
+	if !bytes.Equal(rp, ro) {
+		d.t.Errorf("%s (fresh)\n  payload=%q\n  proxy =%q\n  oracle=%q", desc, payload, rp, ro)
+	}
+}
+
 // respArrayElements decodes a RESP2 array-of-bulk-strings reply into its element payloads.
 // ok is false when the reply is not an array (e.g. an error or a scalar). A nil element
 // ($-1) decodes to "".
