@@ -194,13 +194,24 @@ func handleClient(_ context.Context, c *server.Conn, args [][]byte) {
 		w.SimpleString("OK")
 	case sub == "list" && len(args) == 2:
 		w.SimpleString("OK") // stub: real Redis returns a client-list bulk (§4.5)
+	case sub == "kill" && len(args) == 2:
+		// CLIENT KILL with no addr/filter is a plain "syntax error" in 3.2 (the KILL
+		// branch requires argc==3 old-form or argc>3 filter-form; argc==2 falls
+		// through to addReplyError "syntax error"), not the CLIENT-usage help text.
+		w.Error(resp.ErrSyntax)
 	case sub == "kill" && len(args) >= 3:
 		// KILL addr / KILL <filters>: stub-accepts; addr/filter validation and the
 		// "No such client" reply are not modeled (documented §4.5 residual).
 		w.SimpleString("OK")
 	case sub == "pause" && len(args) == 3:
-		if _, perr := ParseInt(args[2]); perr != nil {
+		v, perr := ParseInt(args[2])
+		if perr != nil {
 			w.Error("ERR timeout is not an integer or out of range")
+			return
+		}
+		if v < 0 {
+			// getTimeoutFromObjectOrReply rejects a negative millisecond timeout.
+			w.Error("ERR timeout is negative")
 			return
 		}
 		w.SimpleString("OK")

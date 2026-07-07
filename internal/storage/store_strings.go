@@ -264,17 +264,45 @@ func parseHexNoExpStored(s string) (float64, bool) {
 }
 
 // formatRedisFloat renders f the way Redis formats an INCRBYFLOAT / HINCRBYFLOAT
-// reply (and the value it stores): ld2string(LD_STR_HUMAN) = "%.17Lf" with trailing
-// zeros and any trailing decimal point trimmed. That is 17 FIXED decimal places, NOT
-// the shortest round-tripping form — the difference shows for tiny magnitudes, where
-// the shortest form prints far more digits (1e-20 -> "0" here, not
-// "0.00000000000000000001"; 9e-18 -> "0.00000000000000001"). This is distinct from
+// reply (and the value it stores): ld2string(LD_STR_HUMAN) = "%.17Lf" on a *long
+// double* accumulator, with trailing zeros and any trailing '.' trimmed.
+//
+// redimos accumulates in float64, not long double, so a straight float64 "%.17f"
+// surfaces float64's ~16-significant-digit binary noise at the 17th decimal place
+// ("0.1" -> "0.10000000000000001", "3.3" -> "3.29999999999999982") whereas the long
+// double's representation error lies beyond 17 decimals and trims clean ("0.1",
+// "3.3"). The shortest round-tripping float64 form reproduces the long double's
+// trimmed "%.17Lf" output for every value whose two representations agree to <= 17
+// fractional digits — i.e. all human-entered decimals — so we prefer it. Only for
+// sub-1e-17 magnitudes does the shortest form print MORE than 17 fractional digits
+// (1e-20 -> "0.00000000000000000001"), where Redis instead rounds to 17 fixed
+// decimals (1e-20 -> "0", 9e-18 -> "0.00000000000000001"); there we fall back to
+// "%.17f" + trim to reproduce that rounding.
+//
+// Residual float64-vs-long-double divergence survives only for genuinely
+// >17-significant-digit values (1234.5678 -> long double "...79999999999999997"),
+// accumulation drift (0.1+0.1+0.1 float64 = 0.30000000000000004), and the exact
+// 17th/18th-decimal rounding boundary (5e-18 -> long double "0" vs float64
+// "0.00000000000000001"). Those are the accepted §4.1 floor. This is distinct from
 // ZSCORE's "%.17g" significant-digit formatting (see formatScore).
 func formatRedisFloat(f float64) []byte {
+	if short := strconv.FormatFloat(f, 'f', -1, 64); fractionalDigits(short) <= 17 {
+		return []byte(short)
+	}
 	s := strconv.FormatFloat(f, 'f', 17, 64)
 	if strings.ContainsRune(s, '.') {
 		s = strings.TrimRight(s, "0")
 		s = strings.TrimRight(s, ".")
 	}
 	return []byte(s)
+}
+
+// fractionalDigits counts the digits after the decimal point in a plain (non-
+// exponent) decimal string such as strconv.FormatFloat(_, 'f', ...) produces; it
+// returns 0 when there is no fractional part.
+func fractionalDigits(s string) int {
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		return len(s) - dot - 1
+	}
+	return 0
 }

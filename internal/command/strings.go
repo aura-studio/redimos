@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"math"
 
 	"github.com/aura-studio/redimos/v2/internal/guard"
 	"github.com/aura-studio/redimos/v2/internal/meta"
@@ -560,18 +559,17 @@ func (r *Router) handleIncrBy(ctx context.Context, c *server.Conn, args [][]byte
 }
 
 // handleDecrBy implements DECRBY key decrement (requirements 5.8, 5.9). A
-// non-integer decrement argument replies the not-an-integer error. The decrement
-// is applied as a negative delta; a decrement of exactly the most negative int64
-// cannot be negated without overflow and replies "-ERR decrement would overflow"
-// (matching Redis), before any value is touched.
+// non-integer decrement argument replies the not-an-integer error. The decrement is
+// applied as the negated delta. Redis 3.2 negates the decrement in C, where -MinInt64
+// wraps back to MinInt64, so DECRBY key -9223372036854775808 is exactly INCRBY key
+// -9223372036854775808 and is decided by the *current value* (0 -> MinInt64, -1 ->
+// overflow), NOT rejected outright. Go's unary minus wraps identically, so we forward
+// -n unconditionally and let the storage seam's value-based overflow check
+// ("increment or decrement would overflow") decide.
 func (r *Router) handleDecrBy(ctx context.Context, c *server.Conn, args [][]byte) {
 	n, err := Args(args).Int(2)
 	if err != nil {
 		WriteNotInteger(c)
-		return
-	}
-	if n == math.MinInt64 {
-		resp.NewWriter(c.Redcon()).Error(resp.ErrDecrOverflow)
 		return
 	}
 	r.incrBy(ctx, c, args[1], -n)

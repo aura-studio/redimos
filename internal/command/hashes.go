@@ -51,7 +51,7 @@ import (
 // invoked from registerDataCommands (router_storage.go). Arity counts include the
 // command name; the mutating commands are marked Write.
 func (r *Router) registerHashes() {
-	r.reg("HSET", -4, true, r.handleHSet)
+	r.reg("HSET", 4, true, r.handleHSet) // Redis 3.2 HSET is exactly arity 4 (single field/value); multi-field HSET is 4.0+
 	r.reg("HSETNX", 4, true, r.handleHSetNX)
 	r.reg("HGET", 3, false, r.handleHGet)
 	r.reg("HMSET", -4, true, r.handleHMSet)

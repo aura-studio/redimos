@@ -41,7 +41,7 @@ func hscanPairs(t *testing.T, flat []string) map[string]string {
 // cursor "0". Requirement 6.3.
 func TestHScanSinglePageReturnsAllFields(t *testing.T) {
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
-	sendRead(t, conn, r, "HSET h a 1 b 2 c 3")
+	sendRead(t, conn, r, "HMSET h a 1 b 2 c 3")
 
 	send(t, conn, "HSCAN h 0")
 	cursor, flat := readScanReply(t, r)
@@ -65,7 +65,7 @@ func TestHScanSinglePageReturnsAllFields(t *testing.T) {
 // 6.3.
 func TestHScanMatchFiltersFields(t *testing.T) {
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
-	sendRead(t, conn, r, "HSET h f:1 a f:2 b other c f:10 d")
+	sendRead(t, conn, r, "HMSET h f:1 a f:2 b other c f:10 d")
 
 	send(t, conn, "HSCAN h 0 MATCH f:*")
 	cursor, flat := readScanReply(t, r)
@@ -109,7 +109,7 @@ func TestHScanCountPagingCoversAllFields(t *testing.T) {
 
 	const n = 20
 	want := make(map[string]string, n)
-	cmd := "HSET h"
+	cmd := "HMSET h"
 	for i := 0; i < n; i++ {
 		f := fmt.Sprintf("f%02d", i)
 		v := fmt.Sprintf("v%02d", i)
@@ -220,7 +220,7 @@ func TestHScanEvictedCursorIsInvalid(t *testing.T) {
 	r := bufio.NewReader(conn)
 
 	// Seed enough fields that a COUNT-2 page does not exhaust the hash.
-	cmd := "HSET h"
+	cmd := "HMSET h"
 	for i := 0; i < 5; i++ {
 		cmd += fmt.Sprintf(" f%d v%d", i, i)
 	}

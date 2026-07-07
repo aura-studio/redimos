@@ -54,17 +54,24 @@ func readSortedBulk(t *testing.T, r *bufio.Reader) []string {
 func TestHSetNewAndUpdateWithHLen(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
 
-	// Two new fields → reply 2 (fields created), HLEN 2.
-	if got, want := sendRead(t, conn, r, "HSET h f1 v1 f2 v2"), ":2"; got != want {
-		t.Errorf("HSET (2 new) = %q, want %q", got, want)
+	// Redis 3.2 HSET writes a single field/value pair (multi-field is 4.0+). Two new
+	// fields → each replies 1 (field created), HLEN 2.
+	if got, want := sendRead(t, conn, r, "HSET h f1 v1"), ":1"; got != want {
+		t.Errorf("HSET (new f1) = %q, want %q", got, want)
+	}
+	if got, want := sendRead(t, conn, r, "HSET h f2 v2"), ":1"; got != want {
+		t.Errorf("HSET (new f2) = %q, want %q", got, want)
 	}
 	if got, want := sendRead(t, conn, r, "HLEN h"), ":2"; got != want {
 		t.Errorf("HLEN = %q, want %q", got, want)
 	}
 
-	// One update (f1) + one new (f3) → reply 1, HLEN 3.
-	if got, want := sendRead(t, conn, r, "HSET h f1 v1b f3 v3"), ":1"; got != want {
-		t.Errorf("HSET (1 update, 1 new) = %q, want %q", got, want)
+	// Update f1 → reply 0 (no new field); new f3 → reply 1, HLEN 3.
+	if got, want := sendRead(t, conn, r, "HSET h f1 v1b"), ":0"; got != want {
+		t.Errorf("HSET (update f1) = %q, want %q", got, want)
+	}
+	if got, want := sendRead(t, conn, r, "HSET h f3 v3"), ":1"; got != want {
+		t.Errorf("HSET (new f3) = %q, want %q", got, want)
 	}
 	if got, want := sendRead(t, conn, r, "HLEN h"), ":3"; got != want {
 		t.Errorf("HLEN after update = %q, want %q", got, want)
@@ -100,7 +107,7 @@ func TestHGetMissing(t *testing.T) {
 
 func TestHMGetInRequestOrder(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	sendRead(t, conn, r, "HSET h a 1 b 2 c 3")
+	sendRead(t, conn, r, "HMSET h a 1 b 2 c 3")
 
 	send(t, conn, "HMGET h c absent a")
 	got := readArray(t, r)
@@ -129,7 +136,7 @@ func TestHMGetAbsentKeyAllNull(t *testing.T) {
 
 func TestHGetAll(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	sendRead(t, conn, r, "HSET h a 1 b 2 c 3")
+	sendRead(t, conn, r, "HMSET h a 1 b 2 c 3")
 
 	send(t, conn, "HGETALL h")
 	got := readHashMap(t, r)
@@ -157,7 +164,7 @@ func TestHGetAllAbsentIsEmptyArray(t *testing.T) {
 
 func TestHDelMaintainsCount(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	sendRead(t, conn, r, "HSET h a 1 b 2 c 3")
+	sendRead(t, conn, r, "HMSET h a 1 b 2 c 3")
 
 	// Delete two existing + one absent → reply 2, HLEN 1.
 	if got, want := sendRead(t, conn, r, "HDEL h a b zzz"), ":2"; got != want {
@@ -215,7 +222,7 @@ func TestHExists(t *testing.T) {
 
 func TestHKeysAndHVals(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	sendRead(t, conn, r, "HSET h a 1 b 2 c 3")
+	sendRead(t, conn, r, "HMSET h a 1 b 2 c 3")
 
 	send(t, conn, "HKEYS h")
 	if got, want := readSortedBulk(t, r), []string{"a", "b", "c"}; !equalStrings(got, want) {
@@ -405,13 +412,16 @@ func TestHashArityErrors(t *testing.T) {
 	}
 }
 
-// TestHSetOddArgs verifies the odd field/value count path (distinct from the
-// arity gate: HSET h f v x has arity 5 which passes -4, but is an odd pairing).
-func TestHSetOddArgs(t *testing.T) {
+// TestHSetRejectsMultiField verifies that Redis 3.2's exact arity 4 is honored: any
+// HSET with more than a single field/value pair (a Redis 4.0+ extension) is rejected
+// by the arity gate, whether the extra args pair up evenly or oddly.
+func TestHSetRejectsMultiField(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
 	want := "-ERR wrong number of arguments for 'hset' command"
-	if got := sendRead(t, conn, r, "HSET h f1 v1 f2"); got != want {
-		t.Errorf("HSET odd pairs = %q, want %q", got, want)
+	for _, cmd := range []string{"HSET h f1 v1 f2", "HSET h f1 v1 f2 v2"} {
+		if got := sendRead(t, conn, r, cmd); got != want {
+			t.Errorf("%q = %q, want %q", cmd, got, want)
+		}
 	}
 }
 

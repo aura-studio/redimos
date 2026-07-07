@@ -985,12 +985,18 @@ func TestIncrNonIntegerTarget(t *testing.T) {
 	}
 }
 
-func TestDecrByMostNegativeOverflows(t *testing.T) {
+func TestDecrByMostNegativeIsValueBased(t *testing.T) {
 	conn, r := startStringServer(t, newFakeStringStore(), fixedNow(1000))
-	// Negating the most-negative int64 as a DECRBY amount would overflow.
-	want := "-ERR decrement would overflow"
-	if got := sendRead(t, conn, r, "DECRBY k -9223372036854775808"); got != want {
-		t.Errorf("DECRBY k MinInt64 = %q, want %q", got, want)
+	// Redis 3.2 negates the decrement in C, where -MinInt64 wraps back to MinInt64, so
+	// DECRBY by the most-negative int64 is INCRBY by it — decided by the current value,
+	// not rejected outright. A missing key starts at 0, so the result is MinInt64.
+	if got, want := sendRead(t, conn, r, "DECRBY k -9223372036854775808"), ":-9223372036854775808"; got != want {
+		t.Errorf("DECRBY fresh k MinInt64 = %q, want %q", got, want)
+	}
+	// From a negative value it genuinely underflows and replies the shared overflow error.
+	sendRead(t, conn, r, "SET n -1")
+	if got, want := sendRead(t, conn, r, "DECRBY n -9223372036854775808"), "-ERR increment or decrement would overflow"; got != want {
+		t.Errorf("DECRBY -1 MinInt64 = %q, want %q", got, want)
 	}
 }
 

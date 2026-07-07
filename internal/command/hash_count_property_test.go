@@ -98,9 +98,9 @@ func TestProperty3HashCountConsistency(t *testing.T) {
 		for step := 0; step < ops; step++ {
 			switch rng.Intn(4) {
 			case 0:
-				// HSET with 1..3 field/value pairs; each field ends present.
+				// HMSET with 1..3 field/value pairs (Redis 3.2 HSET is single-pair); each field ends present.
 				n := 1 + rng.Intn(3)
-				cmd := "HSET " + key
+				cmd := "HMSET " + key
 				touched := make([]string, 0, n)
 				for i := 0; i < n; i++ {
 					f := p3FieldPool[rng.Intn(len(p3FieldPool))]

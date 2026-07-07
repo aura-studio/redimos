@@ -10,10 +10,11 @@ import (
 // live redis:3.2 oracle. (The HELLO-under-requirepass fix needs a requirepass instance
 // and is covered by a unit test in internal/command instead.)
 
-// TestFixIncrByFloatFormatting: INCRBYFLOAT/HINCRBYFLOAT format their reply (and the
-// stored value) with Redis' ld2string(LD_STR_HUMAN) = %.17f + trim — 17 FIXED decimal
-// places, not the shortest round-tripping form. Tiny magnitudes therefore collapse
-// (1e-20 -> "0") instead of printing 20 decimal places.
+// TestFixIncrByFloatFormatting: sub-1e-17 magnitudes collapse to Redis' 17-fixed-
+// decimal rounding (1e-20 -> "0", 9e-18 -> "0.00000000000000001") instead of the
+// shortest form's many decimal places. (Round 8 refined the ordinary-magnitude side
+// to the shortest form — see TestFixIncrByFloatShortDecimals in round8_fixes_test.go;
+// these tiny-magnitude cases still exercise the %.17f fallback path.)
 func TestFixIncrByFloatFormatting(t *testing.T) {
 	d := newDiffer(t)
 	d.eq("INCRBYFLOAT 1e-20 -> 0", bs("INCRBYFLOAT"), d.k("f1"), bs("1e-20"))

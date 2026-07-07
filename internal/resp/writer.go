@@ -152,10 +152,6 @@ const (
 	// the value past the signed 64-bit range. Requirement 5.8.
 	ErrIncrDecrOverflow = "ERR increment or decrement would overflow"
 
-	// ErrDecrOverflow is returned when a DECRBY amount is exactly the most
-	// negative int64, whose negation would itself overflow. Requirement 5.8.
-	ErrDecrOverflow = "ERR decrement would overflow"
-
 	// ErrIncrNaNOrInfinity is returned when an INCRBYFLOAT would produce a NaN or
 	// infinite result. Requirement 5.8.
 	ErrIncrNaNOrInfinity = "ERR increment would produce NaN or Infinity"
