@@ -229,10 +229,12 @@ func (s *redimoStore) HIncrByFloat(ctx context.Context, pk, field string, delta 
 			}
 		}
 
+		// Unlike incrbyfloatCommand, Redis 3.2's hincrbyfloatCommand has NO isnan/isinf
+		// result check: HINCRBYFLOAT accepts an inf/-inf increment (and an inf+(-inf) NaN
+		// result), storing "inf"/"-inf"/"-nan" as the field value. formatRedisFloat renders
+		// those; parseStoredFloat then rejects reading a "-nan" field back (mirroring
+		// string2ld), so a further HINCRBYFLOAT on it errors just as Redis does.
 		next := cur + delta
-		if math.IsNaN(next) || math.IsInf(next, 0) {
-			return false, ErrIncrNaNOrInfinity
-		}
 
 		out := formatRedisFloat(next)
 		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, existed)

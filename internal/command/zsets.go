@@ -397,8 +397,8 @@ func (r *Router) handleZScan(ctx context.Context, c *server.Conn, args [][]byte)
 	// The cursor is a Redis uint64. A value that does not parse is treated as an
 	// invalid cursor (the "restart scan" contract), not a syntax error, matching
 	// SCAN.
-	cursor, err := strconv.ParseUint(string(args[2]), 10, 64)
-	if err != nil {
+	cursor, ok := parseScanCursor(args[2])
+	if !ok {
 		w.Error(resp.ErrInvalidCursor)
 		return
 	}

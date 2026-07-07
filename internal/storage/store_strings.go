@@ -286,6 +286,20 @@ func parseHexNoExpStored(s string) (float64, bool) {
 // "0.00000000000000001"). Those are the accepted §4.1 floor. This is distinct from
 // ZSCORE's "%.17g" significant-digit formatting (see formatScore).
 func formatRedisFloat(f float64) []byte {
+	// Non-finite results: Redis' ld2string special-cases +Inf/-Inf to "inf"/"-inf",
+	// and a NaN falls through its "%.17Lf" to glibc's "-nan". Only HINCRBYFLOAT ever
+	// reaches here with a non-finite value — INCRBYFLOAT rejects those before formatting
+	// (its store guard stays), matching Redis' incrbyfloatCommand isnan/isinf check that
+	// hincrbyfloatCommand lacks.
+	if math.IsInf(f, 1) {
+		return []byte("inf")
+	}
+	if math.IsInf(f, -1) {
+		return []byte("-inf")
+	}
+	if math.IsNaN(f) {
+		return []byte("-nan")
+	}
 	if short := strconv.FormatFloat(f, 'f', -1, 64); fractionalDigits(short) <= 17 {
 		return []byte(short)
 	}

@@ -54,6 +54,20 @@ const (
 	minInt64Abs = uint64(math.MaxInt64) + 1
 )
 
+// parseScanCursor parses a SCAN-family cursor the way Redis' parseScanCursorOrReply
+// does (strtoul, base 10): it tolerates a single leading '+' ("SCAN +0" == "SCAN 0"),
+// which Go's ParseUint rejects, while still rejecting leading whitespace and other
+// junk. Negative-cursor wrap-around ("-1") is not reproduced — redimos cursors are
+// opaque tokens, so a wrapped value would not resolve regardless.
+func parseScanCursor(arg []byte) (uint64, bool) {
+	s := string(arg)
+	if len(s) > 0 && s[0] == '+' {
+		s = s[1:]
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	return n, err == nil
+}
+
 // ParseInt parses a command argument as a strict base-10 signed 64-bit integer,
 // following Redis' string2ll semantics so replies match the Pika v3.2.2 oracle:
 //

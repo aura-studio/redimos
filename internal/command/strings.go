@@ -726,6 +726,15 @@ func (r *Router) handleGetRange(ctx context.Context, c *server.Conn, args [][]by
 // range is empty (lo == hi == 0). strlen must be > 0 (the caller handles the
 // empty string separately).
 func rangeBounds(strlen, start, end int64) (lo, hi int) {
+	// Redis' getrangeCommand has a pre-normalization guard `if (start < 0 && end < 0 &&
+	// start > end) return ""` (t_string.c) that fires BEFORE the negative-index and clamp
+	// steps. It is conditioned on start < 0, so it never affects a start >= 0 request
+	// (0 -200 -> "h", 0 <MinInt64> -> "h") nor a start <= end one (MinInt64 MinInt64 -> "h",
+	// MinInt64 -1 -> "hello"); it only distinguishes both-negative start>end pairs whose
+	// magnitudes both clamp to 0 (-100 -200 -> "" not "h").
+	if start < 0 && end < 0 && start > end {
+		return 0, 0
+	}
 	if start < 0 {
 		start = strlen + start
 	}
@@ -748,10 +757,8 @@ func rangeBounds(strlen, start, end int64) (lo, hi int) {
 	return int(start), int(end + 1)
 }
 
-// NOTE (accepted ultra-edge, §4): Redis 3.2's getrange has an inconsistent result for some
-// doubly-out-of-range NEGATIVE index pairs — e.g. GETRANGE "hello" -100 -200 replies "" while
-// 0 -200 (and even 0 <MinInt64>) replies "h", despite both clamping start/end to 0. That
-// behaviour is not cleanly expressible (it depends on the pre-clamp start sign in a way its C
-// code arrives at by accident), so redimos keeps the straightforward clamp-then-compare above
-// (which matches Redis for every in-range and start>=0 case) and diverges only on a
-// both-indices-wildly-negative GETRANGE — a documented, unfixed corner.
+// NOTE: the both-negative start>end corner (GETRANGE "hello" -100 -200 -> "" while 0 -200
+// -> "h") is now reproduced exactly by rangeBounds' pre-normalization guard above (round 9).
+// It was previously believed unfixable because an earlier clamp-based attempt broke 0 <MinInt64>;
+// the correct fix is Redis' own guard, conditioned on start < 0, which provably leaves every
+// start>=0 and start<=end case untouched (verified byte-for-byte against redis:3.2).

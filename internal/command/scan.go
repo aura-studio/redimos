@@ -41,8 +41,8 @@ func (r *Router) handleScan(ctx context.Context, c *server.Conn, args [][]byte) 
 	// The cursor is a Redis uint64. A value that does not parse (e.g. a mangled or
 	// non-numeric token) is treated as an invalid cursor rather than a syntax error,
 	// matching the "restart scan" contract (requirement 13.5).
-	cursor, err := strconv.ParseUint(string(args[1]), 10, 64)
-	if err != nil {
+	cursor, ok := parseScanCursor(args[1])
+	if !ok {
 		w.Error(resp.ErrInvalidCursor)
 		return
 	}

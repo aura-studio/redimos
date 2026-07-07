@@ -117,9 +117,26 @@ func handleRole(_ context.Context, c *server.Conn, _ [][]byte) {
 
 // handleWait stubs WAIT numreplicas timeout. A DynamoDB-backed proxy has zero Redis
 // replicas (and data is already durable), so the count of replicas that acknowledged
-// prior writes is genuinely 0 — the reply is a real value, not a placeholder.
-func handleWait(_ context.Context, c *server.Conn, _ [][]byte) {
-	resp.NewWriter(c.Redcon()).Int(0)
+// prior writes is genuinely 0 — the reply is a real value, not a placeholder. It still
+// validates its arguments the way Redis' waitCommand does (numreplicas via
+// getLongFromObjectOrReply, timeout via getTimeoutFromObjectOrReply) so a bad WAIT
+// surfaces the same error rather than a bogus :0.
+func handleWait(_ context.Context, c *server.Conn, args [][]byte) {
+	w := resp.NewWriter(c.Redcon())
+	if _, err := ParseInt(args[1]); err != nil {
+		w.Error("ERR value is not an integer or out of range")
+		return
+	}
+	timeout, err := ParseInt(args[2])
+	if err != nil {
+		w.Error("ERR timeout is not an integer or out of range")
+		return
+	}
+	if timeout < 0 {
+		w.Error("ERR timeout is negative")
+		return
+	}
+	w.Int(0)
 }
 
 // handlePFSelfTest stubs PFSELFTEST. Redis' internal HyperLogLog self-test replies
