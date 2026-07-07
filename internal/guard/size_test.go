@@ -44,10 +44,14 @@ func TestCheckKeyBoundary(t *testing.T) {
 
 func TestCheckMemberBoundary(t *testing.T) {
 	ResetInterceptions()
-	if err := CheckMember(bytesOf(MaxNameSize)); err != nil {
+	// Members are sort keys (1-byte prefix + name <= 1024B), so the member limit
+	// is one byte tighter than the key limit: exactly MaxMemberNameSize (1023)
+	// passes, one more byte is rejected. An exactly-1024B member used to pass the
+	// guard and then fail at the backend with a misleading "backend error".
+	if err := CheckMember(bytesOf(MaxMemberNameSize)); err != nil {
 		t.Errorf("CheckMember at limit err = %v, want nil", err)
 	}
-	if err := CheckMember(bytesOf(MaxNameSize + 1)); !errors.Is(err, ErrSizeExceeded) {
+	if err := CheckMember(bytesOf(MaxMemberNameSize + 1)); !errors.Is(err, ErrSizeExceeded) {
 		t.Errorf("CheckMember over limit err = %v, want ErrSizeExceeded", err)
 	}
 	if got := Interceptions(); got != 1 {
@@ -87,7 +91,7 @@ func TestCheckWritePasses(t *testing.T) {
 	ResetInterceptions()
 	err := CheckWrite(
 		bytesOf(MaxNameSize),
-		[][]byte{bytesOf(0), bytesOf(MaxNameSize)},
+		[][]byte{bytesOf(0), bytesOf(MaxMemberNameSize)},
 		[][]byte{bytesOf(MaxValueSize), bytesOf(10)},
 	)
 	if err != nil {
@@ -106,12 +110,12 @@ func TestCheckWriteRejectsAndCountsOnce(t *testing.T) {
 		values  [][]byte
 	}{
 		{"oversized key", bytesOf(MaxNameSize + 1), nil, nil},
-		{"oversized member", bytesOf(4), [][]byte{bytesOf(MaxNameSize + 1)}, nil},
+		{"oversized member", bytesOf(4), [][]byte{bytesOf(MaxMemberNameSize + 1)}, nil},
 		{"oversized value", bytesOf(4), nil, [][]byte{bytesOf(MaxValueSize + 1)}},
 		{
 			"multiple violations count once",
 			bytesOf(MaxNameSize + 1),
-			[][]byte{bytesOf(MaxNameSize + 1)},
+			[][]byte{bytesOf(MaxMemberNameSize + 1)},
 			[][]byte{bytesOf(MaxValueSize + 1)},
 		},
 	}

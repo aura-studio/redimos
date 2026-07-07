@@ -239,6 +239,12 @@ func (r *Router) handleHGet(ctx context.Context, c *server.Conn, args [][]byte) 
 		w.NullBulk()
 		return
 	}
+	// A field too large to be stored (its sort key would exceed DynamoDB's limit) can
+	// never exist, so it is simply absent — reply nil rather than hitting the backend.
+	if !memberStorable(args[2]) {
+		w.NullBulk()
+		return
+	}
 
 	val, found, err := r.Storage.Store.HGet(ctx, pk, string(args[2]))
 	if err != nil {
@@ -277,10 +283,16 @@ func (r *Router) handleHMGet(ctx context.Context, c *server.Conn, args [][]byte)
 
 	if live {
 		names := make([]string, len(reqFields))
+		// Only query fields that CAN exist; an oversized field (sort key past the
+		// DynamoDB limit) is never present and must not reach the backend.
+		queryNames := make([]string, 0, len(reqFields))
 		for i, f := range reqFields {
 			names[i] = string(f)
+			if memberStorable(f) {
+				queryNames = append(queryNames, names[i])
+			}
 		}
-		vals, err := r.Storage.Store.HMGet(ctx, pk, names)
+		vals, err := r.Storage.Store.HMGet(ctx, pk, queryNames)
 		if err != nil {
 			r.writeStoreError(c, err)
 			return
@@ -430,9 +442,13 @@ func (r *Router) handleHDel(ctx context.Context, c *server.Conn, args [][]byte) 
 		return
 	}
 
-	names := make([]string, len(reqFields))
-	for i, f := range reqFields {
-		names[i] = string(f)
+	// An oversized field can never exist, so it removes nothing; drop it before the
+	// store call so its sort key never reaches the backend.
+	names := make([]string, 0, len(reqFields))
+	for _, f := range reqFields {
+		if memberStorable(f) {
+			names = append(names, string(f))
+		}
 	}
 
 	removed, err := r.Storage.Store.HDel(ctx, pk, names)
@@ -465,6 +481,10 @@ func (r *Router) handleHExists(ctx context.Context, c *server.Conn, args [][]byt
 		return
 	}
 	if !live {
+		w.Int(0)
+		return
+	}
+	if !memberStorable(args[2]) { // oversized field can never exist
 		w.Int(0)
 		return
 	}
@@ -523,6 +543,10 @@ func (r *Router) handleHStrlen(ctx context.Context, c *server.Conn, args [][]byt
 		return
 	}
 	if !live {
+		w.Int(0)
+		return
+	}
+	if !memberStorable(args[2]) { // oversized field can never exist
 		w.Int(0)
 		return
 	}

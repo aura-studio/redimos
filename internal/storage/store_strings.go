@@ -263,10 +263,18 @@ func parseHexNoExpStored(s string) (float64, bool) {
 	return f, err == nil
 }
 
-// formatRedisFloat renders f the way Redis formats an INCRBYFLOAT reply: the
-// shortest decimal that round-trips, in plain (non-exponent) notation, with
-// trailing zeros and any trailing decimal point trimmed (so 5.0 -> "5"). Using
-// the 'f' verb with precision -1 yields the trimmed, exponent-free form directly.
+// formatRedisFloat renders f the way Redis formats an INCRBYFLOAT / HINCRBYFLOAT
+// reply (and the value it stores): ld2string(LD_STR_HUMAN) = "%.17Lf" with trailing
+// zeros and any trailing decimal point trimmed. That is 17 FIXED decimal places, NOT
+// the shortest round-tripping form — the difference shows for tiny magnitudes, where
+// the shortest form prints far more digits (1e-20 -> "0" here, not
+// "0.00000000000000000001"; 9e-18 -> "0.00000000000000001"). This is distinct from
+// ZSCORE's "%.17g" significant-digit formatting (see formatScore).
 func formatRedisFloat(f float64) []byte {
-	return []byte(strconv.FormatFloat(f, 'f', -1, 64))
+	s := strconv.FormatFloat(f, 'f', 17, 64)
+	if strings.ContainsRune(s, '.') {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimRight(s, ".")
+	}
+	return []byte(s)
 }

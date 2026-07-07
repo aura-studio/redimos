@@ -124,8 +124,12 @@ func TestSlowlogResetClearsRing(t *testing.T) {
 
 func TestSlowlogUnknownSubcommandIsSyntaxError(t *testing.T) {
 	conn, r := startObsServer(t, Storage{})
-	want := "-ERR syntax error"
-	if got := sendReadValue(t, r, conn, "SLOWLOG BOGUS"); got != want {
-		t.Errorf("SLOWLOG BOGUS = %q, want %q", got, want)
+	// Redis 3.2 slowlogCommand's exact error — used for an unknown subcommand AND
+	// for a known one with the wrong argument count.
+	want := "-ERR Unknown SLOWLOG subcommand or wrong # of args. Try GET, RESET, LEN."
+	for _, line := range []string{"SLOWLOG BOGUS", "SLOWLOG LEN extra", "SLOWLOG RESET extra"} {
+		if got := sendReadValue(t, r, conn, line); got != want {
+			t.Errorf("%s = %q, want %q", line, got, want)
+		}
 	}
 }

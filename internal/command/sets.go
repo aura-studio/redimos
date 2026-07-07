@@ -163,7 +163,7 @@ func (r *Router) handleSAdd(ctx context.Context, c *server.Conn, args [][]byte) 
 // "not present" (Redis imposes no such limit and would store/find it — an accepted
 // platform divergence on the WRITE path, doc §4.1). Without this short-circuit the
 // oversized sort key reaches DynamoDB and returns a misleading "backend error".
-const maxStorableMemberLen = 1024 - 1 // DynamoDB sort-key limit minus the 1-byte prefix
+const maxStorableMemberLen = guard.MaxMemberNameSize // DynamoDB sort-key limit minus the 1-byte prefix
 
 func memberStorable(member []byte) bool { return len(member) <= maxStorableMemberLen }
 

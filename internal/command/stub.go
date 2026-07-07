@@ -143,33 +143,60 @@ func (r *Router) ensureObservability() {
 }
 
 // handleCommand implements the COMMAND probe (requirement 19.1). Bare COMMAND
-// (and any subcommand redimos does not special-case, e.g. COMMAND DOCS/INFO)
 // replies with the empty array "*0" rather than enumerating a command table the
-// proxy does not expose. COMMAND COUNT replies the integer 0. Both are benign
-// fallbacks that keep client init flows from failing.
+// proxy does not expose; COMMAND COUNT replies the integer 0; COMMAND INFO /
+// GETKEYS keep the benign empty-array fallback (Redis 3.2 recognises them, so
+// they must not error). An UNKNOWN subcommand — or COUNT with surplus args, or
+// GETKEYS with no command — replies Redis 3.2 commandCommand's exact final-else
+// error, since real 3.2 errors there rather than replying a benign value.
 func handleCommand(_ context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	if len(args) >= 2 && toLower(string(args[1])) == "count" {
-		w.Int(0)
+	if len(args) == 1 {
+		w.EmptyArray()
 		return
 	}
-	w.EmptyArray()
+	sub := toLower(string(args[1]))
+	switch {
+	case sub == "count" && len(args) == 2:
+		w.Int(0)
+	case sub == "info": // any arg count: 3.2 accepts INFO with 0+ names
+		w.EmptyArray()
+	case sub == "getkeys" && len(args) >= 3:
+		w.EmptyArray()
+	default:
+		w.Error("ERR Unknown subcommand or wrong number of arguments.")
+	}
 }
 
 // handleClient implements the CLIENT probe (requirement 19.2). CLIENT SETNAME
 // replies "+OK" (the name is accepted and discarded — redimos keeps no per-conn
-// name), and CLIENT GETNAME replies the null bulk "$-1" (no name set), matching
-// Redis when no name was assigned. Any other CLIENT subcommand (ID, SETINFO,
-// NO-EVICT, ...) gets a minimal "+OK" so client setup never breaks on an
-// unmodeled subcommand; redimos intentionally does not implement real
-// client-management semantics.
+// name) after validating the name the way Redis 3.2 does (every byte must be a
+// printable ASCII in '!'..'~': no spaces/newlines/special characters), and
+// CLIENT GETNAME replies the null bulk "$-1" (no name set). The real 3.2
+// subcommands whose semantics redimos intentionally does not model
+// (LIST/KILL/PAUSE/REPLY) keep the benign "+OK" stub. An UNKNOWN subcommand
+// (e.g. ID — a 5.0+ addition — or a typo), or GETNAME/SETNAME with the wrong
+// argument count, replies Redis 3.2 clientCommand's exact final-else syntax
+// error rather than a benign +OK.
 func handleClient(_ context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	switch toLower(string(args[1])) {
-	case "getname":
+	sub := toLower(string(args[1]))
+	switch {
+	case sub == "getname" && len(args) == 2:
 		w.NullBulk()
-	default: // setname and every other subcommand
+	case sub == "setname" && len(args) == 3:
+		for _, b := range args[2] {
+			if b < '!' || b > '~' {
+				w.Error("ERR Client names cannot contain spaces, newlines or special characters.")
+				return
+			}
+		}
 		w.SimpleString("OK")
+	case sub == "list" || sub == "kill" || sub == "pause" || sub == "reply":
+		// Real 3.2 subcommands, intentionally unmodeled: benign stub (§4.5).
+		w.SimpleString("OK")
+	default:
+		w.Error("ERR Syntax error, try CLIENT (LIST | KILL | GETNAME | SETNAME | PAUSE | REPLY)")
 	}
 }
 
@@ -190,16 +217,21 @@ var configDefaults = map[string]string{
 // handleConfig implements the CONFIG probe (requirement 19.3). CONFIG GET
 // <param> returns a 2-element array [param, value] for a known default (e.g.
 // CONFIG GET maxmemory -> ["maxmemory", "0"]) and the empty array "*0" for an
-// unknown parameter or a missing parameter argument. CONFIG SET / RESETSTAT /
-// REWRITE reply "+OK" (accepted and discarded — redimos has no mutable runtime
-// config). Any UNKNOWN subcommand replies the exact Redis subcommand error, since
-// Redis' configCommand only recognises GET/SET/RESETSTAT/REWRITE.
+// unknown parameter. CONFIG SET / RESETSTAT / REWRITE reply "+OK" (accepted and
+// discarded — redimos has no mutable runtime config). Arity mirrors Redis 3.2
+// configCommand exactly: GET takes 1 param, SET takes 2, RESETSTAT/REWRITE take
+// none — a wrong count replies "Wrong number of arguments for CONFIG <sub>"
+// echoing the subcommand as the client sent it (badarity label); an UNKNOWN
+// subcommand replies the exact Redis subcommand error.
 func handleConfig(_ context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
+	badArity := func() {
+		w.Error("ERR Wrong number of arguments for CONFIG " + string(args[1]))
+	}
 	switch toLower(string(args[1])) {
 	case "get":
-		if len(args) < 3 {
-			w.EmptyArray()
+		if len(args) != 3 {
+			badArity()
 			return
 		}
 		param := toLower(string(args[2]))
@@ -209,7 +241,17 @@ func handleConfig(_ context.Context, c *server.Conn, args [][]byte) {
 			return
 		}
 		w.BulkArray([][]byte{[]byte(param), []byte(val)})
-	case "set", "resetstat", "rewrite":
+	case "set":
+		if len(args) != 4 {
+			badArity()
+			return
+		}
+		w.SimpleString("OK")
+	case "resetstat", "rewrite":
+		if len(args) != 2 {
+			badArity()
+			return
+		}
 		w.SimpleString("OK")
 	default:
 		w.Error("ERR CONFIG subcommand must be one of GET, SET, RESETSTAT, REWRITE")

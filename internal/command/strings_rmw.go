@@ -155,9 +155,16 @@ func (r *Router) readStringForRMW(ctx context.Context, pk string) (base, physVal
 // success it returns the new value's byte length (the integer both commands reply).
 func (r *Router) rmwString(ctx context.Context, pk string, compute func(base []byte) ([]byte, error)) (newLen int, err error) {
 	for attempt := 0; attempt < storage.MaxRMWRetries; attempt++ {
-		base, physVal, physExists, _, rerr := r.readStringForRMW(ctx, pk)
+		base, physVal, physExists, wrongType, rerr := r.readStringForRMW(ctx, pk)
 		if rerr != nil {
 			return 0, rerr
+		}
+		// A live non-String key is WRONGTYPE — reported BEFORE the compute callback's
+		// value-size guard (Redis' APPEND/SETRANGE run checkType right after lookup,
+		// so a wrong-type key with an oversized value replies WRONGTYPE, not the
+		// size-limit error).
+		if wrongType {
+			return 0, meta.ErrWrongType
 		}
 
 		next, cerr := compute(base)

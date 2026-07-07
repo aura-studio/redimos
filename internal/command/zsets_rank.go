@@ -130,6 +130,10 @@ func (r *Router) handleZRankDir(ctx context.Context, c *server.Conn, args [][]by
 		w.NullBulk()
 		return
 	}
+	if !memberStorable(args[2]) { // oversized member can never exist
+		w.NullBulk()
+		return
+	}
 
 	rank, found, rerr := r.Storage.Store.ZRank(ctx, pk, string(args[2]), rev)
 	if rerr != nil {

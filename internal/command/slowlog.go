@@ -33,19 +33,24 @@ const defaultSlowlogCount = 10
 //   - SLOWLOG LEN         : reply the integer number of entries currently held.
 //   - SLOWLOG RESET       : clear the ring and reply "+OK".
 //
-// An unknown subcommand is a syntax error, matching Redis' minimal handling.
+// An unknown subcommand — OR a known one with the wrong argument count (RESET/LEN
+// take no extra arg, GET takes at most one) — replies Redis' exact slowlogCommand
+// error, not a generic syntax error.
+const errSlowlogSubcommand = "ERR Unknown SLOWLOG subcommand or wrong # of args. Try GET, RESET, LEN."
+
 func (r *Router) handleSlowlog(_ context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	switch toLower(string(args[1])) {
-	case "get":
+	sub := toLower(string(args[1]))
+	switch {
+	case sub == "get" && (len(args) == 2 || len(args) == 3):
 		r.slowlogGet(c, args)
-	case "len":
+	case sub == "len" && len(args) == 2:
 		w.Int(int64(r.Storage.Slowlog.Len()))
-	case "reset":
+	case sub == "reset" && len(args) == 2:
 		r.Storage.Slowlog.Reset()
 		w.SimpleString("OK")
 	default:
-		w.Error(resp.ErrSyntax)
+		w.Error(errSlowlogSubcommand)
 	}
 }
 

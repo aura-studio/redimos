@@ -29,6 +29,10 @@ func (r *Router) handleZScore(ctx context.Context, c *server.Conn, args [][]byte
 		w.NullBulk()
 		return
 	}
+	if !memberStorable(args[2]) { // oversized member can never exist
+		w.NullBulk()
+		return
+	}
 
 	score, found, err := r.Storage.Store.ZScore(ctx, pk, string(args[2]))
 	if err != nil {

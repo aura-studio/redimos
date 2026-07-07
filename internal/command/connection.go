@@ -140,7 +140,12 @@ func (r *Router) Dispatch(ctx context.Context, c *server.Conn, args [][]byte) {
 	}
 
 	// (3) NOAUTH gate — AUTH is the only command permitted while unauthenticated.
-	if r.Config.RequirePass != "" && !c.Authed() && spec.Name != "auth" {
+	// HELLO is exempt too: Redis 3.2 has no HELLO command, so lookupCommand returns
+	// NULL and it errors "unknown command" BEFORE the auth check. redimos registers
+	// HELLO only to fake that unknown-command reply (so go-redis v9 / redis-py fall
+	// back to RESP2) — so it must reach handleHello even on an unauthenticated
+	// password-protected connection, not be swallowed by the gate.
+	if r.Config.RequirePass != "" && !c.Authed() && spec.Name != "auth" && spec.Name != "hello" {
 		writeError(c, resp.ErrNoAuth)
 		return
 	}

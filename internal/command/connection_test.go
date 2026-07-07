@@ -242,6 +242,26 @@ func TestQuitIgnoresExtraArgs(t *testing.T) {
 	}
 }
 
+// TestHelloUnauthGetsUnknownCommand: Redis 3.2 has no HELLO command, so on a
+// password-protected connection an unauthenticated HELLO errors "unknown command"
+// (lookupCommand returns NULL before the auth gate). redimos registers HELLO only to
+// FAKE that unknown-command reply (the RESP2-fallback signal for go-redis v9 /
+// redis-py), so it must be exempt from the NOAUTH gate — the fake reply must fire
+// even before AUTH, or the client handshake gets NOAUTH instead of its signal.
+func TestHelloUnauthGetsUnknownCommand(t *testing.T) {
+	conn, r := startConnServer(t, Config{RequirePass: "s3cret"})
+	want := "-ERR unknown command 'HELLO'"
+	for _, line := range []string{"HELLO", "HELLO 3"} {
+		if got := sendRead(t, conn, r, line); got != want {
+			t.Errorf("unauth %s = %q, want %q", line, got, want)
+		}
+	}
+	// A real command is still gated.
+	if got, want := sendRead(t, conn, r, "ECHO x"), "-NOAUTH Authentication required."; got != want {
+		t.Errorf("unauth ECHO x = %q, want %q", got, want)
+	}
+}
+
 func TestNoGateWhenRequirepassEmpty(t *testing.T) {
 	conn, r := startConnServer(t, Config{})
 	// With no requirepass, business commands run without AUTH.

@@ -16,7 +16,6 @@ import (
 func (r *Router) handleZRem(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	pk := encodePK(c.DB(), args[1])
-	members := bytesToStrings(args[2:])
 
 	_, live, wrongType, err := r.zsetState(ctx, pk)
 	if err != nil {
@@ -30,6 +29,15 @@ func (r *Router) handleZRem(ctx context.Context, c *server.Conn, args [][]byte) 
 	if !live {
 		w.Int(0)
 		return
+	}
+
+	// An oversized member can never exist, so it removes nothing; drop it before the
+	// store call so its sort key never reaches the backend.
+	members := make([]string, 0, len(args)-2)
+	for _, m := range args[2:] {
+		if memberStorable(m) {
+			members = append(members, string(m))
+		}
 	}
 
 	removed, err := r.Storage.Store.ZRem(ctx, pk, members)

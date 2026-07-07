@@ -78,7 +78,7 @@ func (writeCase) Generate(rng *rand.Rand, size int) reflect.Value {
 	nMembers := rng.Intn(4) // 0..3 members
 	wc.members = make([][]byte, nMembers)
 	for i := range wc.members {
-		mSize, mOver := genSize(rng, MaxNameSize)
+		mSize, mOver := genSize(rng, MaxMemberNameSize)
 		wc.members[i] = make([]byte, mSize)
 		wc.anyOver = wc.anyOver || mOver
 	}
@@ -150,7 +150,7 @@ func TestProperty4SingleFieldChecks(t *testing.T) {
 	}
 	fns := []checkFn{
 		{"CheckKey", MaxNameSize, CheckKey},
-		{"CheckMember", MaxNameSize, CheckMember},
+		{"CheckMember", MaxMemberNameSize, CheckMember},
 		{"CheckValue", MaxValueSize, CheckValue},
 	}
 

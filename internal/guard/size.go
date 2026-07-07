@@ -21,10 +21,20 @@ import (
 
 // Size limits enforced before a backend write. Values are exact byte counts.
 const (
-	// MaxNameSize is the inclusive upper bound (1KB) for a key or member name.
-	// A name of exactly MaxNameSize bytes is accepted; one byte more is
-	// rejected. Requirement 14.1.
+	// MaxNameSize is the inclusive upper bound (1KB) for a KEY name. A name of
+	// exactly MaxNameSize bytes is accepted; one byte more is rejected. Key names
+	// go into the DynamoDB partition key (2048B limit), so 1KB leaves ample
+	// headroom for the db prefix. Requirement 14.1.
 	MaxNameSize = 1 * 1024
+
+	// MaxMemberNameSize is the inclusive upper bound for a MEMBER/FIELD name
+	// (hash field, set/zset member). Members are stored in the DynamoDB SORT KEY
+	// as a 1-byte type prefix + the raw name, and DynamoDB caps a sort key at
+	// 1024 bytes — so the largest storable member is 1023 bytes. Without this
+	// tighter bound an exactly-1024-byte member passed the guard but failed at
+	// the backend with a misleading "backend error". Must stay equal to the
+	// command layer's maxStorableMemberLen.
+	MaxMemberNameSize = MaxNameSize - 1
 
 	// MaxValueSize is the inclusive upper bound (390KB) for a value. A value of
 	// exactly MaxValueSize bytes is accepted; one byte more is rejected. The
@@ -57,9 +67,15 @@ func ResetInterceptions() {
 	interceptions.Store(0)
 }
 
-// nameTooLarge reports whether a key/member name exceeds MaxNameSize.
+// nameTooLarge reports whether a KEY name exceeds MaxNameSize.
 func nameTooLarge(name []byte) bool {
 	return len(name) > MaxNameSize
+}
+
+// memberNameTooLarge reports whether a MEMBER/FIELD name exceeds the sort-key
+// budget (MaxMemberNameSize).
+func memberNameTooLarge(name []byte) bool {
+	return len(name) > MaxMemberNameSize
 }
 
 // valueTooLarge reports whether a value exceeds MaxValueSize.
@@ -77,11 +93,11 @@ func CheckKey(key []byte) error {
 	return nil
 }
 
-// CheckMember validates a member name (hash field, set/zset/list member)
-// against MaxNameSize. On violation it counts one interception and returns
-// ErrSizeExceeded; otherwise it returns nil.
+// CheckMember validates a member name (hash field, set/zset member) against
+// MaxMemberNameSize (the DynamoDB sort-key budget). On violation it counts one
+// interception and returns ErrSizeExceeded; otherwise it returns nil.
 func CheckMember(member []byte) error {
-	if nameTooLarge(member) {
+	if memberNameTooLarge(member) {
 		interceptions.Add(1)
 		return ErrSizeExceeded
 	}
@@ -126,7 +142,7 @@ func CheckWrite(key []byte, members [][]byte, values [][]byte) error {
 		return ErrSizeExceeded
 	}
 	for _, m := range members {
-		if nameTooLarge(m) {
+		if memberNameTooLarge(m) {
 			interceptions.Add(1)
 			return ErrSizeExceeded
 		}

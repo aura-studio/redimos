@@ -116,11 +116,14 @@ func (r *Router) handleLPush(ctx context.Context, c *server.Conn, args [][]byte)
 	elements := args[2:]
 
 	pk := encodePK(c.DB(), key)
-	if err := guard.CheckWrite(key, nil, elements); err != nil {
+	// Type check BEFORE the value-size guard (Redis pushGenericCommand checks type
+	// right after lookup), so a live non-list key replies WRONGTYPE even with an
+	// oversized element rather than the size-limit error.
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeList); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
-	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeList); err != nil {
+	if err := guard.CheckWrite(key, nil, elements); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
@@ -135,11 +138,12 @@ func (r *Router) handleRPush(ctx context.Context, c *server.Conn, args [][]byte)
 	elements := args[2:]
 
 	pk := encodePK(c.DB(), key)
-	if err := guard.CheckWrite(key, nil, elements); err != nil {
+	// Type check before the value-size guard (see handleLPush).
+	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeList); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
-	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeList); err != nil {
+	if err := guard.CheckWrite(key, nil, elements); err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
