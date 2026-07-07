@@ -54,6 +54,13 @@ var (
 	// infinite result. Maps to resp.ErrIncrNaNOrInfinity. Requirement 5.8.
 	ErrIncrNaNOrInfinity = errors.New("increment would produce NaN or Infinity")
 
+	// ErrScoreOutOfRange signals that a ZINCRBY / ZADD INCR *result* score falls
+	// outside the storable DynamoDB Number domain. Maps to resp.ErrScoreOutOfRange
+	// ("ERR value is out of range"), matching the deterministic rejection the command
+	// layer already applies to a directly-supplied ZADD/ZUNIONSTORE score — instead of
+	// letting the native ADD fail and leak a misleading retryable "backend error". §4.1.
+	ErrScoreOutOfRange = errors.New("score out of DynamoDB Number domain")
+
 	// ErrHashNotInteger signals that an HINCRBY target field value is not a
 	// base-10 signed 64-bit integer. Maps to resp.ErrHashNotInteger. Requirement
 	// 6.1.

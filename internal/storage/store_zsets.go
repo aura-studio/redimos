@@ -2,10 +2,32 @@ package storage
 
 import (
 	"context"
+	"math"
 	"sort"
 
 	redimo "github.com/aura-studio/redimo/v2"
 )
+
+// zsetScoreMaxMagnitude / zsetScoreMinMagnitude mirror the DynamoDB Number domain
+// bounds the command layer enforces on a directly-supplied score
+// (command.checkScoreDomain). A ZINCRBY / ZADD INCR *result* outside them is
+// unstorable, so ZIncrBy rejects it up front (ErrScoreOutOfRange) rather than letting
+// the native ADD fail with a misleading retryable "backend error". See doc §4.1.
+const (
+	zsetScoreMaxMagnitude = 9.9999999999999999999999999999999999999e+125
+	zsetScoreMinMagnitude = 1e-130
+)
+
+// scoreOutOfDomain reports whether a computed score cannot be persisted as a
+// DynamoDB Number (non-finite, or a finite magnitude above the ceiling / below the
+// non-zero floor).
+func scoreOutOfDomain(f float64) bool {
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return true
+	}
+	m := math.Abs(f)
+	return m > zsetScoreMaxMagnitude || (f != 0 && m < zsetScoreMinMagnitude)
+}
 
 // --- Sorted Set data operations (task 15.1) --------------------------------
 //
@@ -66,9 +88,20 @@ func (s *redimoStore) ZIncrBy(ctx context.Context, pk, member string, delta floa
 	// 0; a prior ZSCORE tells us whether the member was brand-new so the caller bumps
 	// cnt only then.
 	cl := s.client.WithContext(ctx)
-	_, found, err := cl.ZSCORE(pk, member)
+	old, found, err := cl.ZSCORE(pk, member)
 	if err != nil {
 		return 0, false, err
+	}
+
+	// Pre-check the result against the storable Number domain using the score we just
+	// read (a missing member starts at 0), so an out-of-domain result is rejected
+	// deterministically before the native ADD touches the backend. No extra read.
+	result := delta
+	if found {
+		result = old + delta
+	}
+	if scoreOutOfDomain(result) {
+		return 0, false, ErrScoreOutOfRange
 	}
 
 	newScore, err := cl.ZINCRBY(pk, member, delta)

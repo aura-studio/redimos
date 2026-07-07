@@ -55,14 +55,20 @@ const (
 )
 
 // parseScanCursor parses a SCAN-family cursor the way Redis' parseScanCursorOrReply
-// does (strtoul, base 10): it tolerates a single leading '+' ("SCAN +0" == "SCAN 0"),
-// which Go's ParseUint rejects, while still rejecting leading whitespace and other
-// junk. Negative-cursor wrap-around ("-1") is not reproduced — redimos cursors are
-// opaque tokens, so a wrapped value would not resolve regardless.
+// does (strtoull, base 10): it tolerates a single leading '+' or '-' ("SCAN +0" and
+// "SCAN -0" both == "SCAN 0"), which Go's ParseUint rejects, while still rejecting
+// leading whitespace and other junk. A negative NON-zero cursor ("-1") wraps to a huge
+// value that a redimos opaque cursor could never resolve, so only the "-0"/"-00"/…
+// zero spellings are accepted on the '-' side; other negatives are rejected.
 func parseScanCursor(arg []byte) (uint64, bool) {
 	s := string(arg)
-	if len(s) > 0 && s[0] == '+' {
-		s = s[1:]
+	if len(s) > 0 && (s[0] == '+' || s[0] == '-') {
+		neg := s[0] == '-'
+		n, err := strconv.ParseUint(s[1:], 10, 64)
+		if err != nil || (neg && n != 0) {
+			return 0, false
+		}
+		return n, true
 	}
 	n, err := strconv.ParseUint(s, 10, 64)
 	return n, err == nil
@@ -145,6 +151,14 @@ func ParseInt(arg []byte) (int64, error) {
 // returns ErrNotFloat. Requirement 6.1.
 func ParseFloat(arg []byte) (float64, error) {
 	s := string(arg)
+	// Redis' strtod treats an EMPTY string as 0.0 (INCRBYFLOAT/HINCRBYFLOAT with an empty
+	// increment, or applied to a stored empty-string value, and GEOADD/GEORADIUS with an
+	// empty coordinate/radius). Note this is exact-"" only — a single space still fails
+	// (getDoubleFromObject rejects trailing junk), and the integer path (ParseInt) still
+	// rejects "" via string2ll.
+	if len(s) == 0 {
+		return 0, nil
+	}
 	// Redis' getDoubleFromObject is strtod-based, and strtod does NOT accept Go's
 	// underscore digit separators ("1_000"). Go's strconv.ParseFloat DOES, so reject any
 	// '_' up front to avoid accepting a value Redis would reject as "not a valid float".

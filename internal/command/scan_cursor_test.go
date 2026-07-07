@@ -17,10 +17,14 @@ func TestParseScanCursor(t *testing.T) {
 		{"42", 42, true},
 		{"+42", 42, true},
 		{"18446744073709551615", 18446744073709551615, true}, // max uint64
+		{"-0", 0, true},                                       // -0 wraps to 0 (valid start/end cursor)
+		{"-00", 0, true},                                      // any zero spelling
 		{"+", 0, false},                                       // bare sign
+		{"-", 0, false},                                       // bare sign
 		{"++0", 0, false},                                     // only one leading sign
 		{" 0", 0, false},                                      // leading whitespace
-		{"-1", 0, false},                                      // negative not reproduced
+		{"-1", 0, false},                                      // negative non-zero not reproduced
+		{"-42", 0, false},                                     // negative non-zero not reproduced
 		{"", 0, false},                                        // empty
 		{"0x10", 0, false},                                    // no hex
 		{"3.5", 0, false},                                     // no float

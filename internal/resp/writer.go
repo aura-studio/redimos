@@ -152,6 +152,11 @@ const (
 	// the value past the signed 64-bit range. Requirement 5.8.
 	ErrIncrDecrOverflow = "ERR increment or decrement would overflow"
 
+	// ErrScoreOutOfRange is returned when a ZINCRBY / ZADD INCR result score falls
+	// outside the storable DynamoDB Number domain (matching the deterministic reply the
+	// command layer already gives a directly-supplied out-of-domain ZADD score). §4.1.
+	ErrScoreOutOfRange = "ERR value is out of range"
+
 	// ErrIncrNaNOrInfinity is returned when an INCRBYFLOAT would produce a NaN or
 	// infinite result. Requirement 5.8.
 	ErrIncrNaNOrInfinity = "ERR increment would produce NaN or Infinity"

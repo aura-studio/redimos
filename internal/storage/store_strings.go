@@ -221,6 +221,12 @@ func parseStoredInt(b []byte) (int64, error) {
 // is rejected (strconv.ParseFloat enforces full consumption). On failure it
 // returns ErrNotFloat.
 func parseStoredFloat(b []byte) (float64, error) {
+	// A stored empty-string value reads back as 0.0 for INCRBYFLOAT/HINCRBYFLOAT, matching
+	// Redis' strtod (SET k ""; INCRBYFLOAT k 1 -> 1). Mirrors command.ParseFloat's empty
+	// short-circuit so an increment argument and a stored value validate identically.
+	if len(b) == 0 {
+		return 0, nil
+	}
 	s := string(b)
 	// Match Redis' strtod, not Go's strconv: reject Go-style underscore digit separators
 	// ("1_000") that strtod does not accept, and accept a hex integer constant without the

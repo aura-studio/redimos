@@ -90,6 +90,8 @@ func (r *Router) writeStoreError(c *server.Conn, err error) {
 		w.Error(resp.ErrIncrDecrOverflow)
 	case errors.Is(err, storage.ErrIncrNaNOrInfinity):
 		w.Error(resp.ErrIncrNaNOrInfinity)
+	case errors.Is(err, storage.ErrScoreOutOfRange):
+		w.Error(resp.ErrScoreOutOfRange)
 	case errors.Is(err, storage.ErrHashNotInteger):
 		w.Error(resp.ErrHashNotInteger)
 	case errors.Is(err, storage.ErrHashNotFloat):

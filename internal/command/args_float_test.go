@@ -15,10 +15,11 @@ func TestParseFloat(t *testing.T) {
 		{"-1.5", -1.5, true},
 		{"0", 0, true},
 		{"1e10", 1e10, true},
-		{"", 0, false},
+		{"", 0, true},      // Redis strtod: empty string -> 0.0 (INCRBYFLOAT/HINCRBYFLOAT/GEO)
 		{"abc", 0, false},
 		{"nan", 0, false},  // NaN is rejected
 		{"NaN", 0, false},  // NaN is rejected
+		{" ", 0, false},    // a single space is NOT empty -> rejected
 		{" 3 ", 0, false},  // surrounding whitespace rejected
 		{"3.5x", 0, false}, // trailing garbage rejected
 	}
