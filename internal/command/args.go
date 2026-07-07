@@ -62,7 +62,13 @@ const (
 // zero spellings are accepted on the '-' side; other negatives are rejected.
 func parseScanCursor(arg []byte) (uint64, bool) {
 	s := string(arg)
-	if len(s) > 0 && (s[0] == '+' || s[0] == '-') {
+	// Redis' strtoull("") returns 0 with eptr at '\0', so an EMPTY cursor is accepted as
+	// cursor 0 ("SCAN "" == SCAN 0"). A single space still fails (strtoull leaves eptr at
+	// the space).
+	if len(s) == 0 {
+		return 0, true
+	}
+	if s[0] == '+' || s[0] == '-' {
 		neg := s[0] == '-'
 		n, err := strconv.ParseUint(s[1:], 10, 64)
 		if err != nil || (neg && n != 0) {

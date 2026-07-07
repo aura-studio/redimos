@@ -25,7 +25,8 @@ func TestParseScanCursor(t *testing.T) {
 		{" 0", 0, false},                                      // leading whitespace
 		{"-1", 0, false},                                      // negative non-zero not reproduced
 		{"-42", 0, false},                                     // negative non-zero not reproduced
-		{"", 0, false},                                        // empty
+		{"", 0, true},                                         // strtoull("") -> 0 : SCAN "" == SCAN 0
+		{" ", 0, false},                                       // a single space still fails
 		{"0x10", 0, false},                                    // no hex
 		{"3.5", 0, false},                                     // no float
 	}
