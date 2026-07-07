@@ -250,11 +250,37 @@ func ErrWrongNumberOfArgs(cmd string) string {
 }
 
 // ErrUnknownCommand builds the unknown-command error text for name. The name is
-// echoed exactly as the client sent it (case preserved), matching Redis/Pika,
-// e.g. ErrUnknownCommand("HELLO") yields "ERR unknown command 'HELLO'".
+// echoed as the client sent it (case preserved), matching Redis/Pika, e.g.
+// ErrUnknownCommand("HELLO") yields "ERR unknown command 'HELLO'". Any CR/LF in the
+// name is mapped to a space first: Redis' addReplyErrorFormat runs
+// sdsmapchars(s,"\r\n","  ",2) so an error reply can never contain a bare CR/LF that
+// would corrupt RESP framing (a command name is arbitrary client bytes).
 // Requirement 2.1, 3.3.
 func ErrUnknownCommand(name string) string {
-	return "ERR unknown command '" + name + "'"
+	return "ERR unknown command '" + sanitizeErrText(name) + "'"
+}
+
+// sanitizeErrText maps CR and LF to spaces, mirroring Redis' sdsmapchars on error
+// replies so echoed client-supplied bytes cannot break the single-line RESP error
+// framing ("-<text>\r\n").
+func sanitizeErrText(s string) string {
+	hasCRLF := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\r' || s[i] == '\n' {
+			hasCRLF = true
+			break
+		}
+	}
+	if !hasCRLF {
+		return s
+	}
+	b := []byte(s)
+	for i := range b {
+		if b[i] == '\r' || b[i] == '\n' {
+			b[i] = ' '
+		}
+	}
+	return string(b)
 }
 
 // ErrInvalidExpireTime builds the invalid-expire-time error text for cmd, used

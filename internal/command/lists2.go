@@ -100,10 +100,6 @@ func (r *Router) handleLSet(ctx context.Context, c *server.Conn, args [][]byte) 
 		w.Error(resp.ErrNotInteger)
 		return
 	}
-	if err := guard.CheckWrite(key, nil, [][]byte{value}); err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
 
 	all, err := r.Storage.Store.LRangeAll(ctx, pk)
 	if err != nil {
@@ -118,6 +114,14 @@ func (r *Router) handleLSet(ctx context.Context, c *server.Conn, args [][]byte) 
 	}
 	if idx < 0 || idx >= n {
 		w.Error(resp.ErrIndexOutOfRange)
+		return
+	}
+
+	// Size-guard the new value only AFTER the index-range check: Redis validates the
+	// index (index-out-of-range) before any value-size consideration, so a bad index
+	// with an oversized value replies index-out-of-range, not the size error.
+	if err := guard.CheckWrite(key, nil, [][]byte{value}); err != nil {
+		r.writeStoreError(c, err)
 		return
 	}
 
@@ -348,11 +352,6 @@ func (r *Router) handleLInsert(ctx context.Context, c *server.Conn, args [][]byt
 		return
 	}
 
-	if err := guard.CheckWrite(key, nil, [][]byte{value}); err != nil {
-		r.writeStoreError(c, err)
-		return
-	}
-
 	all, err := r.Storage.Store.LRangeAll(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
@@ -368,6 +367,14 @@ func (r *Router) handleLInsert(ctx context.Context, c *server.Conn, args [][]byt
 	}
 	if pivotIdx < 0 {
 		w.Int(-1)
+		return
+	}
+
+	// Size-guard the inserted value only AFTER the pivot is found: Redis scans for the
+	// pivot first and replies :-1 (no write) when it is absent, so an absent pivot with
+	// an oversized value replies :-1, not the size error.
+	if err := guard.CheckWrite(key, nil, [][]byte{value}); err != nil {
+		r.writeStoreError(c, err)
 		return
 	}
 

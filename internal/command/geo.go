@@ -6,9 +6,9 @@ package command
 // these handlers are pure command-layer logic over the zset store — GEOADD is a
 // ZADD with a geohash score; GEOPOS/GEODIST/GEOHASH decode the score; GEORADIUS
 // reads the members and filters by exact haversine distance. This makes
-// GEOPOS/GEOHASH/GEODIST/WITHHASH byte-identical to Redis 3.2.
-//
-// Not yet supported: STORE / STOREDIST.
+// GEOPOS/GEOHASH/GEODIST/WITHHASH byte-identical to Redis 3.2. GEORADIUS STORE /
+// STOREDIST write the matched members (geohash score / distance) to a destination
+// zset, exactly like Redis (see geoStore).
 
 import (
 	"context"
@@ -198,6 +198,13 @@ func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte
 
 // memberPos resolves a member's stored geohash score to its (lat, lon) centre.
 func (r *Router) memberPos(ctx context.Context, pk, member string) (lat, lon float64, found bool, err error) {
+	// A member too large to be stored can never exist, so report it not-found rather
+	// than sending its oversized sort key to the backend (a GEO key is a zset; the
+	// same member-SK limit applies). GEODIST/GEOPOS/GEOHASH then reply nil and
+	// GEORADIUSBYMEMBER "could not decode requested zset member", matching Redis.
+	if len(member) > maxStorableMemberLen {
+		return 0, 0, false, nil
+	}
 	score, ok, serr := r.Storage.Store.ZScore(ctx, pk, member)
 	if serr != nil || !ok {
 		return 0, 0, false, serr
@@ -318,13 +325,17 @@ type geoRadiusOptions struct {
 	count     int
 	sortAsc   bool
 	sortDesc  bool
+	store     bool   // STORE or STOREDIST given
+	storeDist bool   // STOREDIST (store the distance) vs STORE (store the geohash score)
+	storeKey  []byte // destination key for STORE/STOREDIST
 }
 
 // parseGeoRadiusOptions parses the trailing GEORADIUS options. It returns an empty
 // errText on success, or the exact Redis error body to reply. COUNT uses string2ll
 // semantics (getLongFromObjectOrReply): a non-integer is "value is not an integer
-// or out of range" and a non-positive value is "COUNT must be > 0"; a missing value
-// or an unknown token (incl. the unsupported STORE/STOREDIST) is a syntax error.
+// or out of range" and a non-positive value is "COUNT must be > 0". STORE/STOREDIST
+// take a destination key (the later of the two wins, as in Redis). A missing value
+// or an unknown token is a syntax error.
 func parseGeoRadiusOptions(rest [][]byte) (geoRadiusOptions, string) {
 	var o geoRadiusOptions
 	for i := 0; i < len(rest); i++ {
@@ -352,12 +363,39 @@ func parseGeoRadiusOptions(rest [][]byte) (geoRadiusOptions, string) {
 			}
 			o.count = int(n)
 			i++
+		case "store", "storedist":
+			if i+1 >= len(rest) {
+				return o, resp.ErrSyntax
+			}
+			o.store = true
+			o.storeDist = toLower(string(rest[i])) == "storedist"
+			o.storeKey = rest[i+1]
+			i++
 		default:
-			// STORE / STOREDIST and unknown tokens are not supported.
 			return o, resp.ErrSyntax
 		}
 	}
 	return o, ""
+}
+
+// errGeoStoreWithWith is Redis' error when STORE/STOREDIST is combined with any of
+// the WITH* reply options (geo.c: they are mutually exclusive).
+const errGeoStoreWithWith = "ERR STORE option in GEORADIUS is not compatible with WITHDIST, WITHHASH and WITHCOORDS options"
+
+// checkGeoStore validates the STORE/STOREDIST option against the WITH* flags and the
+// read-only command variant, returning the RESP error body or "". readOnly is set for
+// GEORADIUS_RO / GEORADIUSBYMEMBER_RO, which forbid writing a destination.
+func (o geoRadiusOptions) checkGeoStore(readOnly bool) string {
+	if !o.store {
+		return ""
+	}
+	if readOnly {
+		return resp.ErrSyntax
+	}
+	if o.withCoord || o.withDist || o.withHash {
+		return errGeoStoreWithWith
+	}
+	return ""
 }
 
 func (r *Router) handleGeoRadius(ctx context.Context, c *server.Conn, args [][]byte) {
@@ -389,7 +427,19 @@ func (r *Router) handleGeoRadius(ctx context.Context, c *server.Conn, args [][]b
 		w.Error(errText)
 		return
 	}
+	if e := opts.checkGeoStore(isReadOnlyGeo(args[0])); e != "" {
+		w.Error(e)
+		return
+	}
 	r.geoRadiusReply(ctx, c, pk, lat, lon, radiusMeters, unit, opts)
+}
+
+// isReadOnlyGeo reports whether the command is a GEORADIUS_RO / GEORADIUSBYMEMBER_RO
+// read-only variant (which forbids STORE/STOREDIST).
+func isReadOnlyGeo(name []byte) bool {
+	return len(name) >= 3 && (name[len(name)-3] == '_') &&
+		(name[len(name)-2] == 'r' || name[len(name)-2] == 'R') &&
+		(name[len(name)-1] == 'o' || name[len(name)-1] == 'O')
 }
 
 func (r *Router) handleGeoRadiusByMember(ctx context.Context, c *server.Conn, args [][]byte) {
@@ -422,6 +472,10 @@ func (r *Router) handleGeoRadiusByMember(ctx context.Context, c *server.Conn, ar
 	opts, errText := parseGeoRadiusOptions(args[5:])
 	if errText != "" {
 		w.Error(errText)
+		return
+	}
+	if e := opts.checkGeoStore(isReadOnlyGeo(args[0])); e != "" {
+		w.Error(e)
 		return
 	}
 	r.geoRadiusReply(ctx, c, pk, lat, lon, radiusMeters, unit, opts)
@@ -472,6 +526,13 @@ func (r *Router) geoRadiusReply(ctx context.Context, c *server.Conn, pk string, 
 		results = results[:o.count]
 	}
 
+	// STORE / STOREDIST: write the (sorted, COUNT-limited) matches to a destination
+	// zset and reply the number stored, instead of returning the member array.
+	if o.store {
+		r.geoStore(ctx, c, o.storeKey, o.storeDist, results)
+		return
+	}
+
 	buf := resp.AppendArrayHeader(nil, len(results))
 	withAny := o.withCoord || o.withDist || o.withHash
 	for _, res := range results {
@@ -504,6 +565,60 @@ func (r *Router) geoRadiusReply(ctx context.Context, c *server.Conn, pk string, 
 		}
 	}
 	c.Redcon().WriteRaw(buf)
+}
+
+// geoStore writes the STORE/STOREDIST matches to the destination zset (score = the
+// geohash for STORE, the distance-in-query-unit for STOREDIST) and replies the number
+// of members stored. It replaces the destination entirely (like the *STORE family):
+// an empty result set leaves dest deleted and replies 0.
+func (r *Router) geoStore(ctx context.Context, c *server.Conn, storeKey []byte, storeDist bool, results []geoResult) {
+	w := resp.NewWriter(c.Redcon())
+	destPK := encodePK(c.DB(), storeKey)
+
+	members := make([]storage.ZMember, len(results))
+	memberBytes := make([][]byte, len(results))
+	for i, res := range results {
+		score := float64(res.score)
+		if storeDist {
+			score = res.dist
+		}
+		members[i] = storage.ZMember{Member: res.member, Score: score}
+		memberBytes[i] = []byte(res.member)
+	}
+	if err := guard.CheckWrite(storeKey, memberBytes, nil); err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+
+	// Replace dest: drop its meta (clears any prior type) and reclaim its members,
+	// matching *STORE overwrite-regardless-of-type semantics.
+	if _, err := r.Storage.Meta.DeleteMeta(ctx, destPK); err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	if _, err := r.Storage.Store.DeleteMembers(ctx, destPK); err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	if len(members) == 0 {
+		// An empty result leaves dest deleted (an empty zset does not exist) and replies 0.
+		w.Int(0)
+		return
+	}
+	if err := r.ensureTypeExpiring(ctx, destPK, meta.TypeZSet); err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	added, err := r.Storage.Store.ZAdd(ctx, destPK, members)
+	if err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	if err := r.adjustCount(ctx, destPK, meta.TypeZSet, int64(added)); err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+	w.Int(int64(added))
 }
 
 // geoWrongType replies WRONGTYPE for a live non-zset key (a GEO key is a zset).

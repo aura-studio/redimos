@@ -162,12 +162,25 @@ func (r *Router) zaddFlagPath(ctx context.Context, c *server.Conn, w *resp.Write
 		return
 	}
 
+	// Size-guard EVERY member BEFORE the per-pair ZScore reads below: an oversized
+	// member's sort key would otherwise reach DynamoDB (ZScore GetItem) and return a
+	// misleading generic "backend error" instead of the deterministic size error the
+	// no-flag fast path gives. (Redis stores the member; redimos cannot — accepted
+	// §4.1 member-SK platform limit — so a clean error is the best achievable.)
+	allMembers := make([][]byte, 0, len(pairs)/2)
+	for j := 1; j < len(pairs); j += 2 {
+		allMembers = append(allMembers, pairs[j])
+	}
+	if err := guard.CheckWrite(key, allMembers, nil); err != nil {
+		r.writeStoreError(c, err)
+		return
+	}
+
 	scoreOf := make(map[string]float64, len(pairs)/2)
 	hasMember := make(map[string]bool, len(pairs)/2)
 	loaded := make(map[string]bool, len(pairs)/2)
 	final := make(map[string]float64, len(pairs)/2)
 	writeOrder := make([]string, 0, len(pairs)/2)
-	memberBytes := make([][]byte, 0, len(pairs)/2)
 	added, changed := 0, 0
 
 	for j := 0; j < len(pairs); j += 2 {
@@ -181,7 +194,6 @@ func (r *Router) zaddFlagPath(ctx context.Context, c *server.Conn, w *resp.Write
 				return
 			}
 			scoreOf[m], hasMember[m], loaded[m] = cur, found, true
-			memberBytes = append(memberBytes, mb)
 		}
 		if (nx && hasMember[m]) || (xx && !hasMember[m]) {
 			continue // gated out; the in-command view is unchanged
@@ -198,11 +210,6 @@ func (r *Router) zaddFlagPath(ctx context.Context, c *server.Conn, w *resp.Write
 			writeOrder = append(writeOrder, m)
 		}
 		final[m] = score
-	}
-
-	if err := guard.CheckWrite(key, memberBytes, nil); err != nil {
-		r.writeStoreError(c, err)
-		return
 	}
 
 	if len(writeOrder) > 0 {

@@ -174,10 +174,10 @@ func handleCommand(_ context.Context, c *server.Conn, args [][]byte) {
 // printable ASCII in '!'..'~': no spaces/newlines/special characters), and
 // CLIENT GETNAME replies the null bulk "$-1" (no name set). The real 3.2
 // subcommands whose semantics redimos intentionally does not model
-// (LIST/KILL/PAUSE/REPLY) keep the benign "+OK" stub. An UNKNOWN subcommand
-// (e.g. ID — a 5.0+ addition — or a typo), or GETNAME/SETNAME with the wrong
-// argument count, replies Redis 3.2 clientCommand's exact final-else syntax
-// error rather than a benign +OK.
+// (LIST/KILL/PAUSE/REPLY) keep the benign "+OK" stub for their VALID forms, but
+// their wrong-arity / bad-argument forms error exactly as Redis 3.2 clientCommand
+// does (each branch gates on argc before falling to the final-else). An UNKNOWN
+// subcommand (e.g. ID — a 5.0+ addition — or a typo) also replies that syntax error.
 func handleClient(_ context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	sub := toLower(string(args[1]))
@@ -192,9 +192,25 @@ func handleClient(_ context.Context, c *server.Conn, args [][]byte) {
 			}
 		}
 		w.SimpleString("OK")
-	case sub == "list" || sub == "kill" || sub == "pause" || sub == "reply":
-		// Real 3.2 subcommands, intentionally unmodeled: benign stub (§4.5).
+	case sub == "list" && len(args) == 2:
+		w.SimpleString("OK") // stub: real Redis returns a client-list bulk (§4.5)
+	case sub == "kill" && len(args) >= 3:
+		// KILL addr / KILL <filters>: stub-accepts; addr/filter validation and the
+		// "No such client" reply are not modeled (documented §4.5 residual).
 		w.SimpleString("OK")
+	case sub == "pause" && len(args) == 3:
+		if _, perr := ParseInt(args[2]); perr != nil {
+			w.Error("ERR timeout is not an integer or out of range")
+			return
+		}
+		w.SimpleString("OK")
+	case sub == "reply" && len(args) == 3:
+		switch toLower(string(args[2])) {
+		case "on", "off", "skip":
+			w.SimpleString("OK")
+		default:
+			w.Error(resp.ErrSyntax)
+		}
 	default:
 		w.Error("ERR Syntax error, try CLIENT (LIST | KILL | GETNAME | SETNAME | PAUSE | REPLY)")
 	}

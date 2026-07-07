@@ -123,13 +123,11 @@ func (r *Router) handleZStore(ctx context.Context, c *server.Conn, args [][]byte
 	keyArgs := rest[:numKeys]
 	tail := rest[numKeys:]
 
-	weights, agg, errText := parseZStoreOptions(tail, int(numKeys))
-	if errText != "" {
-		w.Error(errText)
-		return
-	}
-
-	// Load each operand into an in-memory member->score map (non-atomic snapshot).
+	// Load + type-check each operand BEFORE parsing WEIGHTS/AGGREGATE: Redis
+	// zunionInterGenericCommand looks the source keys up and rejects a wrong-type
+	// source (WRONGTYPE) before it ever parses the optional clauses, so a wrong-type
+	// source with a bad WEIGHTS value replies WRONGTYPE, not "weight value is not a
+	// float". (This load is a non-atomic snapshot either way.)
 	operands := make([]map[string]float64, numKeys)
 	for i, k := range keyArgs {
 		opPK := encodePK(c.DB(), k)
@@ -143,6 +141,12 @@ func (r *Router) handleZStore(ctx context.Context, c *server.Conn, args [][]byte
 			return
 		}
 		operands[i] = scores
+	}
+
+	weights, agg, errText := parseZStoreOptions(tail, int(numKeys))
+	if errText != "" {
+		w.Error(errText)
+		return
 	}
 
 	result := combineZStores(operands, weights, agg, inter)

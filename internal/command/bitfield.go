@@ -79,11 +79,14 @@ func (r *Router) handleBitField(ctx context.Context, c *server.Conn, args [][]by
 				maxBytes = nb
 			}
 		}
-		if gerr := guard.CheckValueSize(maxBytes); gerr != nil {
-			r.writeStoreError(c, gerr)
-			return
-		}
 		_, err := r.rmwString(ctx, pk, func(base []byte) ([]byte, error) {
+			// Reject an over-large result BEFORE growing the buffer, but INSIDE the
+			// compute callback so it runs AFTER rmwString's WRONGTYPE check: Redis
+			// checks the key type before any size consideration, so a wrong-type key
+			// with an over-cap write offset replies WRONGTYPE, not the size error.
+			if gerr := guard.CheckValueSize(maxBytes); gerr != nil {
+				return nil, gerr
+			}
 			next := append([]byte(nil), base...)
 			// Grow to the highest write offset UP FRONT — Redis' lookupStringForBitCommand
 			// sizes (and zero-fills) the string to the top write bit before applying any op,
@@ -219,26 +222,24 @@ func parseBitfieldType(tok []byte) (signed bool, nbits int, ok bool) {
 func parseBitfieldOffset(tok []byte, nbits int) (int64, bool) {
 	// Redis getBitOffsetFromArgument parses the offset (and the "#n" field index) via
 	// string2ll, which rejects a leading '+' and leading zeros; ParseInt mirrors that.
+	// Redis bounds the OFFSET ALONE ((offset>>3) >= 512MB, i.e. offset >= 2^32), NOT
+	// offset+width — so the last <width> bits below 2^32 are valid (a GET there reads
+	// past the value and returns 0). An out-of-cap WRITE is caught later by the
+	// value-size guard, so we do not need offset+width here.
 	if len(tok) > 0 && tok[0] == '#' {
 		idx, err := ParseInt(tok[1:])
 		if err != nil || idx < 0 {
 			return 0, false
 		}
-		// Guard idx*nbits against int64 overflow (which produced a NEGATIVE bit offset and a
-		// negative slice index -> process panic), then bound the resulting offset like SETBIT.
-		if idx > (maxBitOffset-int64(nbits))/int64(nbits) {
+		// For "#n" the offset is n*width. Reject (avoiding int64 overflow) exactly when
+		// n*width would reach 2^32.
+		if idx > (maxBitOffset-1)/int64(nbits) {
 			return 0, false
 		}
-		off := idx * int64(nbits)
-		if off+int64(nbits) > maxBitOffset {
-			return 0, false
-		}
-		return off, true
+		return idx * int64(nbits), true
 	}
 	off, err := ParseInt(tok)
-	// Bound offset+width at maxBitOffset (2^32), matching SETBIT; an unbounded offset let bfSet
-	// grow the value to terabytes (OOM) before the write-size guard ran.
-	if err != nil || off < 0 || off+int64(nbits) > maxBitOffset {
+	if err != nil || off < 0 || off >= maxBitOffset {
 		return 0, false
 	}
 	return off, true
