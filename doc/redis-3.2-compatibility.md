@@ -182,6 +182,7 @@ Redis 单线程串行、每命令原子；redimos 把一条命令映射为多次
 | 分歧 | redimos 行为 | 原理（底层机制） | 立场 |
 |---|---|---|---|
 | **拒绝 Redis 的 C 未定义行为怪癖（`SELECT`）** | `SELECT -9223372036854775808`→Redis 因 `(int)INT64_MIN==0` 回 `+OK`，redimos 判越界拒 | Redis 依赖 C 的整型截断 UB；redimos 用 Go 正确判界 | 有意**比 Redis 更正确**，不追随其 UB |
+| **TTL 溢出区确定性即刻过期（`SET EX`/`SETEX`/`EXPIRE` 家族，round-2/v1.42.0）** | 过期时间大到触及/溢出 int64 毫秒域（如 `SET EX 9223372036854775`）时，redimos **确定性即刻过期删键**（`EXISTS 0`/`TTL -2`）。Redis 3.2 在该区**自身不自洽**：`EXPIRE 9223372036854775`→删，但 `SET EX 9223372036854775`→**保留**（`TTL` 返原值），`SET EX 9300000000000000`（`sec×1000` 已溢出 int64）竟仍 `EXISTS 1`——SET-EX 与 EXPIRE 两条路径溢出点不同、同极值行为相反 | Redis 的过期时刻算术 `basetime + sec×1000` 依赖 C int64 溢出/UB，无自洽规则可仿；redimos 存 epoch 秒、在 ms 域溢出阈值统一判即刻过期 | 有意**确定性**、不追随 Redis 的 C-UB（该区无干净可复刻的规则）。TTL 达 ~2.9 亿年、纯 ultra-edge，真实客户端不触发（round-10 复核确认，记录不修） |
 
 > **v1.49.0(round-8)起两条旧「超集」项已回归对齐、不再是差异**：①多字段 `HSET k f1 v1 f2 v2` 现与 3.2 一样回 arity 错误（HSET arity 精确 4）；②`DECRBY k -9223372036854775808` 现与 3.2 一样按当前值判定（`0`→`INT64_MIN`），不再自行拒绝。
 
