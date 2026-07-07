@@ -84,7 +84,7 @@
 
 「523 键 0 不一致」是针对一份具体测试负载的实测结果。系统审计 Pika 能写入 binlog 的全部写命令后，以下边界会让**特定操作静默丢失**（回包被 pika-migrate 批量丢弃，工具侧无告警）——多为**源侧使用了 redimos 有意不支持/受平台限制的写**，非 redimos 缺陷；列此供迁移前评估与规避。
 
-- **redimos 拒绝的写命令**（`SORT … STORE` / `MOVE` / `RESTORE`）：若源在**增量期**执行了这些写，pika-migrate 原样转发 → redimos 拒 → 该操作丢失。`SORT STORE`（Redis 3.2 是写；Pika blackwidow 对 `SORT` 支持有限）、`MOVE`（跨 DB，单 DB 迁移一般不触发）、客户端 `RESTORE`（罕见）。规避：迁移期避免对源发这些命令，或迁移后对受影响键重做一次确定性写。**注**：`RENAME`/`RENAMENX`/`FLUSHDB`/`FLUSHALL`/`PERSIST` 已实现，不在此列。
+- **redimos 拒绝的写命令**（`SORT … STORE` / `MOVE` / `RESTORE`）：若源在**增量期**执行了这些写，pika-migrate 原样转发 → redimos 拒 → 该操作丢失。`SORT STORE`（Redis 3.2 是写；Pika blackwidow 对 `SORT` 支持有限）、`MOVE`（跨 DB，单 DB 迁移一般不触发）、客户端 `RESTORE`（罕见）。规避：迁移期避免对源发这些命令，或迁移后对受影响键重做一次确定性写。**⚠️ `RENAME`/`RENAMENX` 同属被拒的写**（`r.reg` 注册了专用 handler，但无条件回 `is not supported`——整集合成员在新 pk 下重写 + 原子搬 TTL，非原子、与 `MOVE` 同类平台限；源在增量期 `RENAME` 会静默丢）。`FLUSHDB`/`FLUSHALL` 亦被拒（会擦整张共享表）。**只有 `PERSIST` 是真实现**。（v1.51.0 doc 曾误把这些注册命令当「已实现」,v1.51.1/round-11 已纠正。）
 - **超大值 / 成员名 / 键名被 guard 拒**：Pika（RocksDB）单值可达几十 MB，redimos 在 ~390KB（值）/ 1023B（集合成员名/哈希字段名）/ ~2046B（键名）处 `guard` 拒 → 该键/操作丢失。规避：迁移前确认源无超限键（同 §4「单值大小」，扩展到成员/键名）。
 - **批量大小 flag 必须为默认 0**：全量按 `sync-batch-num`（常 100+）发大 `HMSET`/`SADD`/`ZADD`/`RPUSH`。目标 redimos 若设了 `-max-collection-result` 或 `-max-command-bytes` 非 0，超阈批量会被拒 → 丢失。**迁移目标保持这两个 cap 为默认 0（禁用）**。
 - **`pksetexat` → `SETEX <ts-now>` 的 TTL 漂移**：pika-migrate 把 Pika 内部的绝对过期时刻改写成相对 `SETEX`，差值按工具端解析时刻算；若迁移慢或时钟不同步，目标 TTL 会偏移，极端情形 `ts ≤ now` 时算出 `SETEX ttl ≤ 0` 被拒（该近过期键丢失）。属 pika-migrate 改写 + 时钟问题，redimos `SETEX` 本身正确。
