@@ -231,9 +231,16 @@ func (r *Router) handleGeoDist(ctx context.Context, c *server.Conn, args [][]byt
 	}
 
 	pk := encodePK(c.DB(), args[1])
-	// GEODIST on a missing key/member replies $-1 via the member-not-found path below,
-	// matching Redis' shared.null fallback, so liveness is not needed here.
-	if _, done := r.geoWrongType(ctx, c, pk); done {
+	// Redis' geodistCommand distinguishes the two absent cases: a missing KEY replies
+	// shared.emptybulk ($0) via lookupKeyReadOrReply(...emptybulk), while a missing MEMBER
+	// of a present key replies shared.nullbulk ($-1) below. GEOPOS/GEOHASH make the same
+	// live-vs-not split.
+	live, done := r.geoWrongType(ctx, c, pk)
+	if done {
+		return
+	}
+	if !live {
+		w.BulkString([]byte(""))
 		return
 	}
 
