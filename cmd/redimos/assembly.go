@@ -143,6 +143,17 @@ func run(cfg appConfig) error {
 
 	ddb := dynamodb.NewFromConfig(awsCfg, ddbobs.WithObservability(dynamoObs))
 
+	// Optional (-auto-create-table): create the table with redimo's schema if it is
+	// missing, or verify an existing table's schema is compatible — BEFORE the backend
+	// check below, which needs the table to exist. Off by default, so a bare launch
+	// touches no table-level APIs (DescribeTable/CreateTable) and preserves the prior
+	// "operator owns the table" behaviour.
+	if cfg.autoCreateTable {
+		if err := storage.EnsureTable(ctx, ddb, cfg.table); err != nil {
+			return fmt.Errorf("auto-create-table: %w", err)
+		}
+	}
+
 	// Fail fast: confirm the backend is reachable, the table exists, and credentials
 	// are valid BEFORE serving, instead of binding the RESP listener and then erroring
 	// on every command. Uses a bounded GetItem on a reserved sentinel key (only the
@@ -361,8 +372,8 @@ func run(cfg appConfig) error {
 		return fmt.Errorf("bind %s: %w", cfg.addr, err)
 	}
 
-	log.Printf("redimos serving: addr=%s metrics=%s table=%s inst=%s consistency=%s auth=%t multi-db=%t",
-		cfg.addr, metricsAddr, cfg.table, instID, cfg.consistency, cfg.requirepass != "", cfg.multiDB)
+	log.Printf("redimos serving: addr=%s metrics=%s table=%s inst=%s consistency=%s auth=%t multi-db=%t auto-create-table=%t",
+		cfg.addr, metricsAddr, cfg.table, instID, cfg.consistency, cfg.requirepass != "", cfg.multiDB, cfg.autoCreateTable)
 
 	// Block until a signal cancels ctx or the listener fails.
 	select {
