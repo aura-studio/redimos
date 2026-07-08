@@ -1,0 +1,40 @@
+# Differential-testing oracle for redimos.
+#
+# Brings up the official Pika v3.2.2 container to serve as the behavior oracle
+# (Requirement 1.6): the same RESP2 command sequence is sent to both Pika and
+# redimos, and the raw replies are compared byte-for-byte.
+#
+# Pika listens on its default port 9221 inside the container. We publish it on
+# the host as the familiar Redis port 6379 so local runs and CI can point a
+# standard Redis client at localhost:6379.
+#
+# Usage:
+#   docker compose -f test/docker-compose.yml up -d      # start the oracle
+#   docker compose -f test/docker-compose.yml ps         # check status/health
+#   docker compose -f test/docker-compose.yml down -v    # stop and remove data
+
+services:
+  pika-oracle:
+    image: pikadb/pika:v3.2.2
+    container_name: redimos-pika-oracle
+    # Host 6379 (Redis convention) -> container 9221 (Pika default port).
+    ports:
+      - "6379:9221"
+    # Persist RocksDB data in a named volume so restarts keep state; drop it
+    # with `down -v` for a clean-room oracle between test runs.
+    volumes:
+      - pika-data:/pika/db
+      - pika-log:/pika/log
+    restart: unless-stopped
+    healthcheck:
+      # Pika images are minimal and may not ship redis-cli, so probe the TCP
+      # port directly via bash's /dev/tcp instead of a Redis PING.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9221' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pika-data:
+  pika-log:

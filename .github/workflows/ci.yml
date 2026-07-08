@@ -1,0 +1,170 @@
+name: CI
+
+# CI for the redimos proxy.
+#
+# Two responsibilities (see design.md "两项目布局" / Testing Strategy "redimo fork 回归"):
+#   1. redimo-fork-regression: pin the redimo fork to a LOCKED commit (tracking the
+#      v2.0 branch, module github.com/aura-studio/redimo/v2) and run its Strings /
+#      Hashes / Lists / Sets / SortedSets data structure regression tests. The fork
+#      is still stabilizing hashes/lists, so we lock the commit and keep these
+#      regression tests green as a gate.
+#   2. redimos-build-test: build and test the redimos proxy module itself.
+#
+# 需求: 术语表 Redimo_Store
+
+on:
+  # Automatic runs on push / pull_request are disabled; run manually from the
+  # Actions tab (workflow_dispatch) when needed.
+  workflow_dispatch:
+
+env:
+  # redimo fork pinned reference (LOCKED commit = tag v2.8.2 on the v2.0 branch).
+  # Update this together with the redimo version required in the redimos go.mod
+  # whenever the fork is intentionally bumped.
+  REDIMO_REPO: aura-studio/redimo
+  REDIMO_REF: 81b3db3c66fbba821dade56bcc5b37cb5a3ce85d
+  # Use exactly the installed toolchain (matches go.mod's `go 1.25`); never let
+  # GOTOOLCHAIN=auto silently download a different, unpinned toolchain.
+  GOTOOLCHAIN: local
+
+jobs:
+  redimo-fork-regression:
+    name: redimo fork data-structure regression
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+
+      - name: Check out redimo fork at locked commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REDIMO_REPO }}
+          ref: ${{ env.REDIMO_REF }}
+          path: redimo
+
+      - name: Verify locked commit
+        working-directory: redimo
+        run: |
+          echo "redimo fork checked out at: $(git rev-parse HEAD)"
+          if [ "$(git rev-parse HEAD)" != "${REDIMO_REF}" ]; then
+            echo "::error::redimo fork HEAD does not match locked REDIMO_REF (${REDIMO_REF})"
+            exit 1
+          fi
+
+      - name: Start DynamoDB Local
+        uses: rrainn/dynamodb-action@v4.0.0
+        with:
+          port: 8000
+          cors: '*'
+
+      - name: Download dependencies
+        working-directory: redimo
+        run: go mod download
+
+      - name: Build redimo fork
+        working-directory: redimo
+        run: go build -v .
+
+      # Run ONLY the Strings / Hashes / Lists / Sets / SortedSets regression tests.
+      # Anchored alternation keeps geo / streams / composite / values / key tests out
+      # of scope so this job is a focused gate on the five data structures.
+      - name: Run Strings / Hashes / Lists / Sets / SortedSets regression tests
+        working-directory: redimo
+        run: |
+          go test -v -count=1 -run '^(TestBasic|TestGETSET|TestCounters|TestAtomicOps|TestBasicHashes|TestAtomicHashOps|TestHashCounters|TestHSETCAS|TestHMGETDuplicateFields|TestLBasics|TestRPOPLPUSH|TestListIndexBasedCRUD|TestListValueBasedCRUD|TestConcurrent.*|TestSingleThread|TestMultiThread|TestBasicSets|TestSetOperations|TestSetModifiers|TestZBasic|TestZPops|TestZRanges|TestZCounts|TestZAggregations|TestDeleteMembers.*|TestScanMetaKeys|TestSweepOrphans|TestDeleteMetaIfEmpty|TestEnsureType.*|TestReturnValueIntE|TestLSETAcceptsBinary|TestBulkPushOrder.*|TestLPushOrder|TestSADDSREMCounts.*|TestLREMNumericOrder|TestHSETNXOnExistingHash|Test.*ExcludesMeta|TestWithContextIsThreaded|TestAudit.*)$' .
+
+  redimos-build-test:
+    name: redimos build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out redimos
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+
+      - name: Start DynamoDB Local
+        uses: rrainn/dynamodb-action@v4.0.0
+        with:
+          port: 8000
+          cors: '*'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        run: go test -v -count=1 ./...
+
+      - name: Test (race detector)
+        run: go test -race -count=1 ./...
+
+  redimos-integration:
+    name: redimos integration (proxy vs Redis 3.2)
+    runs-on: ubuntu-latest
+    services:
+      # A real Redis 3.2 oracle for the differential dimensions (A–P).
+      redis:
+        image: redis:3.2
+        ports:
+          - 6379:6379
+    steps:
+      - name: Check out redimos
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+
+      - name: Start DynamoDB Local
+        uses: rrainn/dynamodb-action@v4.0.0
+        with:
+          port: 8000
+          cors: '*'
+
+      - name: Create the DynamoDB table (pk/sk Binary + skN LSI)
+        env:
+          AWS_ACCESS_KEY_ID: dummy
+          AWS_SECRET_ACCESS_KEY: dummy
+          AWS_REGION: us-east-1
+        run: |
+          aws dynamodb create-table \
+            --endpoint-url http://localhost:8000 \
+            --table-name redis-data \
+            --attribute-definitions AttributeName=pk,AttributeType=B AttributeName=sk,AttributeType=B AttributeName=skN,AttributeType=N \
+            --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
+            --billing-mode PAY_PER_REQUEST \
+            --local-secondary-indexes 'IndexName=idx,KeySchema=[{AttributeName=pk,KeyType=HASH},{AttributeName=skN,KeyType=RANGE}],Projection={ProjectionType=KEYS_ONLY}'
+
+      - name: Build the proxy
+        run: go build -o /tmp/redimos ./cmd/redimos
+
+      - name: Start the redimos proxy
+        env:
+          AWS_ACCESS_KEY_ID: dummy
+          AWS_SECRET_ACCESS_KEY: dummy
+          AWS_REGION: us-east-1
+        run: |
+          /tmp/redimos -addr :6380 -metrics-addr :9124 \
+            -dynamo-endpoint http://localhost:8000 -table redis-data \
+            -consistency strong -multi-db -scan-timeout 5s &
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/6380) 2>/dev/null; then echo "proxy up"; exec 3>&-; break; fi
+            sleep 1
+          done
+
+      - name: Run integration + differential suite (vs Redis 3.2)
+        env:
+          REDIMOS_PROXY_ADDR: 127.0.0.1:6380
+          REDIMOS_REDIS_ORACLE: 127.0.0.1:6379
+          # Fail (not silently skip) if the proxy/oracle endpoints are unset, so a
+          # misconfigured job can never pass green having tested nothing.
+          REDIMOS_REQUIRE_INTEGRATION: '1'
+        run: go test -v -count=1 ./test/integration/
