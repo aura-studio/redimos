@@ -75,18 +75,40 @@ type DeleterConfig struct {
 	// This guard lives ONLY on the async lazy-delete path; the synchronous live-collection
 	// rewrite (LReplaceAll) never routes through the deleter and so is unaffected.
 	IsLive func(ctx context.Context, pk string) (bool, error)
+
+	// Synchronous, when true, makes the Deleter reclaim members INLINE on the caller's
+	// goroutine instead of queueing them for a background worker: Enqueue(pk) runs the
+	// same process(pk) (the IsLive recreate-guard, then DeleteMembers, with the same
+	// metrics) synchronously and returns only once the members are gone, and Start
+	// becomes a no-op (no background goroutine is ever spawned). The default (false)
+	// is today's asynchronous behaviour — a bounded queue drained by a background
+	// worker — so this field is purely additive and every existing caller is unchanged.
+	//
+	// This is the mode the in-process embedding (redimos.NewInProcessClient) uses so a
+	// DEL is fully synchronous (members reclaimed before DEL returns) and no background
+	// goroutine exists. SyncContext supplies the context handed to process; when nil a
+	// context.Background() is used. Rate limiting (RatePerSecond) and QueueCapacity are
+	// ignored in synchronous mode.
+	Synchronous bool
+
+	// SyncContext is the context passed to the inline reclaim (IsLive + DeleteMembers)
+	// when Synchronous is true. A nil value uses context.Background(). It is ignored in
+	// the default asynchronous mode, where each reclaim uses the worker's context.
+	SyncContext context.Context
 }
 
 // Deleter is the in-memory lazy-delete queue plus the background goroutine that
 // drains it. It is safe for concurrent Enqueue calls from many connection
 // goroutines. The zero value is not usable; construct one with NewDeleter.
 type Deleter struct {
-	deleter MemberDeleter
-	queue   chan string
-	rate    float64
-	onError func(pk string, err error)
-	logger  Logger
-	isLive  func(ctx context.Context, pk string) (bool, error)
+	deleter     MemberDeleter
+	queue       chan string
+	rate        float64
+	onError     func(pk string, err error)
+	logger      Logger
+	isLive      func(ctx context.Context, pk string) (bool, error)
+	synchronous bool
+	syncCtx     context.Context
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -112,22 +134,41 @@ func NewDeleter(md MemberDeleter, cfg DeleterConfig) *Deleter {
 		capacity = DefaultQueueCapacity
 	}
 
+	syncCtx := cfg.SyncContext
+	if syncCtx == nil {
+		syncCtx = context.Background()
+	}
+
 	return &Deleter{
-		deleter: md,
-		queue:   make(chan string, capacity),
-		rate:    cfg.RatePerSecond,
-		onError: cfg.OnError,
-		logger:  cfg.Logger,
-		isLive:  cfg.IsLive,
-		quit:    make(chan struct{}),
-		done:    make(chan struct{}),
+		deleter:     md,
+		queue:       make(chan string, capacity),
+		rate:        cfg.RatePerSecond,
+		onError:     cfg.OnError,
+		logger:      cfg.Logger,
+		isLive:      cfg.IsLive,
+		synchronous: cfg.Synchronous,
+		syncCtx:     syncCtx,
+		quit:        make(chan struct{}),
+		done:        make(chan struct{}),
 	}
 }
 
-// Enqueue schedules pk's data items for asynchronous deletion. It never blocks:
-// if the bounded queue is full it drops the pk (incrementing Dropped) so the
-// calling command path is never stalled. Safe for concurrent use.
+// Enqueue schedules pk's data items for deletion.
+//
+// In the default asynchronous mode it never blocks: if the bounded queue is full it
+// drops the pk (incrementing Dropped) so the calling command path is never stalled.
+//
+// In synchronous mode (DeleterConfig.Synchronous) it instead reclaims the members
+// INLINE on the caller's goroutine by running the same process(pk) — the IsLive
+// recreate-guard, then DeleteMembers, with the same metrics — and returns only once
+// the members are gone. No background worker is involved. Safe for concurrent use in
+// both modes (process only touches the injected deleter and atomic counters).
 func (d *Deleter) Enqueue(pk string) {
+	if d.synchronous {
+		d.process(d.syncCtx, pk)
+		return
+	}
+
 	select {
 	case d.queue <- pk:
 	default:
@@ -137,7 +178,14 @@ func (d *Deleter) Enqueue(pk string) {
 
 // Start launches the background worker. It is idempotent: only the first call
 // starts a goroutine. The worker stops when ctx is cancelled or Stop is called.
+//
+// In synchronous mode (DeleterConfig.Synchronous) Start is a no-op: reclamation
+// happens inline in Enqueue, so no background goroutine is ever spawned. Stop is
+// likewise a no-op then (started stays false).
 func (d *Deleter) Start(ctx context.Context) {
+	if d.synchronous {
+		return
+	}
 	d.startOnce.Do(func() {
 		d.started.Store(true)
 		go d.run(ctx)
