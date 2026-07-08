@@ -135,7 +135,7 @@ func (r *Router) handleDel(ctx context.Context, c *server.Conn, args [][]byte) {
 
 	var deleted int64
 	for _, key := range args[1:] {
-		pk := encodePK(c.DB(), key)
+		pk := r.encodePK(c.DB(), key)
 
 		m, found, err := r.Storage.Meta.Load(ctx, pk)
 		if err != nil {
@@ -170,7 +170,7 @@ func (r *Router) handleExists(ctx context.Context, c *server.Conn, args [][]byte
 
 	var count int64
 	for _, key := range args[1:] {
-		pk := encodePK(c.DB(), key)
+		pk := r.encodePK(c.DB(), key)
 
 		live, err := r.keyLive(ctx, pk)
 		if err != nil {
@@ -190,7 +190,7 @@ func (r *Router) handleExists(ctx context.Context, c *server.Conn, args [][]byte
 // "+set"/"+zset". A missing or expired key replies "+none", matching Redis/Pika.
 func (r *Router) handleType(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	m, found, err := r.Storage.Meta.Load(ctx, pk)
 	if err != nil {
@@ -274,7 +274,7 @@ func (r *Router) applyExpire(ctx context.Context, c *server.Conn, args [][]byte,
 		return
 	}
 
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	now := r.now()
 
 	live, err := r.keyLive(ctx, pk)
@@ -417,7 +417,7 @@ func (r *Router) handlePTTL(ctx context.Context, c *server.Conn, args [][]byte) 
 // the remaining-time reply.
 func (r *Router) replyTTL(ctx context.Context, c *server.Conn, args [][]byte, millis bool) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	now := r.now()
 
 	m, found, err := r.Storage.Meta.Load(ctx, pk)
@@ -447,7 +447,7 @@ func (r *Router) replyTTL(ctx context.Context, c *server.Conn, args [][]byte, mi
 // remove. Applies to a key of any type (requirement 10.11).
 func (r *Router) handlePersist(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	now := r.now()
 
 	m, found, err := r.Storage.Meta.Load(ctx, pk)

@@ -101,7 +101,7 @@ func (r *Router) handleZStore(ctx context.Context, c *server.Conn, args [][]byte
 	w := resp.NewWriter(c.Redcon())
 
 	destKey := args[1]
-	destPK := encodePK(c.DB(), destKey)
+	destPK := r.encodePK(c.DB(), destKey)
 
 	numKeys, err := ParseInt(args[2])
 	if err != nil {
@@ -130,7 +130,7 @@ func (r *Router) handleZStore(ctx context.Context, c *server.Conn, args [][]byte
 	// float". (This load is a non-atomic snapshot either way.)
 	operands := make([]map[string]float64, numKeys)
 	for i, k := range keyArgs {
-		opPK := encodePK(c.DB(), k)
+		opPK := r.encodePK(c.DB(), k)
 		scores, wrongType, lerr := r.loadZStoreOperand(ctx, opPK)
 		if lerr != nil {
 			r.writeStoreError(c, lerr)

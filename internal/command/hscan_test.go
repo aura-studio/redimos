@@ -202,7 +202,7 @@ func TestHScanUnknownCursorIsInvalid(t *testing.T) {
 func TestHScanEvictedCursorIsInvalid(t *testing.T) {
 	store := newFakeStringStore()
 	reg := scan.New(scan.Config{InstID: scanInstID, Capacity: 1})
-	router := NewRouterWithStorage(Config{}, Storage{Store: store, Now: fixedNow(1000), Scan: reg})
+	router := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: store, Now: fixedNow(1000), Scan: reg})
 	s := server.New(server.Options{Addr: "127.0.0.1:0", InstID: scanInstID}, router)
 
 	signal := make(chan error, 1)

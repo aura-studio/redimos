@@ -115,7 +115,7 @@ func (r *Router) handleLPush(ctx context.Context, c *server.Conn, args [][]byte)
 	key := args[1]
 	elements := args[2:]
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	// Type check BEFORE the value-size guard (Redis pushGenericCommand checks type
 	// right after lookup), so a live non-list key replies WRONGTYPE even with an
 	// oversized element rather than the size-limit error.
@@ -137,7 +137,7 @@ func (r *Router) handleRPush(ctx context.Context, c *server.Conn, args [][]byte)
 	key := args[1]
 	elements := args[2:]
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	// Type check before the value-size guard (see handleLPush).
 	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeList); err != nil {
 		r.writeStoreError(c, err)
@@ -174,7 +174,7 @@ func (r *Router) pushXCommon(
 	w := resp.NewWriter(c.Redcon())
 	key := args[1]
 	elements := args[2:]
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	_, live, wrongType, err := r.listState(ctx, pk)
 	if err != nil {
@@ -217,7 +217,7 @@ func (r *Router) popCommon(
 	pop func(context.Context, string) ([]byte, bool, error),
 ) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	_, live, wrongType, err := r.listState(ctx, pk)
 	if err != nil {
@@ -256,7 +256,7 @@ func (r *Router) popCommon(
 // WRONGTYPE. A non-integer start/stop replies the not-an-integer error.
 func (r *Router) handleLRange(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	start, err := ParseInt(args[2])
 	if err != nil {
@@ -306,7 +306,7 @@ func (r *Router) handleLRange(ctx context.Context, c *server.Conn, args [][]byte
 // error.
 func (r *Router) handleLIndex(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	// Redis checks key existence and type BEFORE parsing the index, so a missing
 	// key replies "$-1" and a wrong-type key replies WRONGTYPE even when the index
@@ -349,7 +349,7 @@ func (r *Router) handleLIndex(ctx context.Context, c *server.Conn, args [][]byte
 // replies WRONGTYPE.
 func (r *Router) handleLLen(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	m, live, wrongType, err := r.listState(ctx, pk)
 	if err != nil {

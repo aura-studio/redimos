@@ -248,22 +248,23 @@ func (r *Router) handleSelect(_ context.Context, c *server.Conn, args [][]byte) 
 		w.Error(resp.ErrInvalidDBIndex)
 		return
 	}
-	if idx == 0 {
+	if idx < 0 {
+		w.Error(resp.ErrInvalidDBIndex)
+		return
+	}
+	// Single-DB mode: every DB index aliases to the one shared keyspace (db0). Any
+	// non-negative SELECT is accepted and maps the connection to db0, so "all DBs
+	// point to the single table" (redimos single-DB mode).
+	if !r.Config.MultiDB {
 		c.SetDB(0)
 		w.SimpleString("OK")
 		return
 	}
-	// Non-zero index with multi-DB disabled: only DB 0 exists, so reject as an invalid
-	// index (redimos single-DB mode).
-	if !r.Config.MultiDB {
-		w.Error(resp.ErrInvalidDBIndex)
-		return
-	}
-	// Multi-DB: bound the index to [0, databases) like Redis 3.2 (default 16).
-	// Previously any positive index was accepted. Redis 3.2.12 replies the SAME
-	// "invalid DB index" text for a numeric-but-out-of-range index as for a
-	// non-numeric one (verified against the live oracle), so reuse ErrInvalidDBIndex.
-	if idx < 0 || idx >= int64(r.databases()) {
+	// Multi-DB: bound the index to [0, databases) like Redis 3.2 (default 16). Redis
+	// 3.2.12 replies the SAME "invalid DB index" text for a numeric-but-out-of-range
+	// index as for a non-numeric one (verified against the live oracle), so reuse
+	// ErrInvalidDBIndex.
+	if idx >= int64(r.databases()) {
 		w.Error(resp.ErrInvalidDBIndex)
 		return
 	}

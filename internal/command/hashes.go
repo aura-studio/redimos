@@ -115,11 +115,11 @@ func (r *Router) handleHSet(ctx context.Context, c *server.Conn, args [][]byte) 
 
 	fields, values, hfields := splitHashPairs(rest)
 
-	if !r.ensureHashWritable(ctx, c, encodePK(c.DB(), key), key, fields, values) {
+	if !r.ensureHashWritable(ctx, c, r.encodePK(c.DB(), key), key, fields, values) {
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	added, err := r.Storage.Store.HSet(ctx, pk, hfields)
 	if err != nil {
 		r.writeStoreError(c, err)
@@ -153,11 +153,11 @@ func (r *Router) handleHMSet(ctx context.Context, c *server.Conn, args [][]byte)
 
 	fields, values, hfields := splitHashPairs(rest)
 
-	if !r.ensureHashWritable(ctx, c, encodePK(c.DB(), key), key, fields, values) {
+	if !r.ensureHashWritable(ctx, c, r.encodePK(c.DB(), key), key, fields, values) {
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	added, err := r.Storage.Store.HSet(ctx, pk, hfields)
 	if err != nil {
 		r.writeStoreError(c, err)
@@ -197,7 +197,7 @@ func (r *Router) handleHSetNX(ctx context.Context, c *server.Conn, args [][]byte
 	w := resp.NewWriter(c.Redcon())
 	key, field, val := args[1], args[2], args[3]
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	if !r.ensureHashWritable(ctx, c, pk, key, [][]byte{field}, [][]byte{val}) {
 		return
 	}
@@ -224,7 +224,7 @@ func (r *Router) handleHSetNX(ctx context.Context, c *server.Conn, args [][]byte
 // or the field does not exist. A live non-Hash key replies WRONGTYPE.
 func (r *Router) handleHGet(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	_, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
@@ -265,7 +265,7 @@ func (r *Router) handleHGet(ctx context.Context, c *server.Conn, args [][]byte) 
 // (or the key is absent/expired). A live non-Hash key replies WRONGTYPE.
 func (r *Router) handleHMGet(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	reqFields := args[2:]
 
 	_, live, wrongType, err := r.hashState(ctx, pk)
@@ -314,7 +314,7 @@ func (r *Router) handleHMGet(ctx context.Context, c *server.Conn, args [][]byte)
 // empty array "*0"; a live non-Hash key replies WRONGTYPE.
 func (r *Router) handleHGetAll(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	m, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
@@ -352,7 +352,7 @@ func (r *Router) handleHGetAll(ctx context.Context, c *server.Conn, args [][]byt
 // replies WRONGTYPE.
 func (r *Router) handleHKeys(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	m, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
@@ -390,7 +390,7 @@ func (r *Router) handleHKeys(ctx context.Context, c *server.Conn, args [][]byte)
 // replies WRONGTYPE.
 func (r *Router) handleHVals(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	m, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
@@ -425,7 +425,7 @@ func (r *Router) handleHVals(ctx context.Context, c *server.Conn, args [][]byte)
 // replies ":0"; a live non-Hash key replies WRONGTYPE.
 func (r *Router) handleHDel(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	reqFields := args[2:]
 
 	_, live, wrongType, err := r.hashState(ctx, pk)
@@ -469,7 +469,7 @@ func (r *Router) handleHDel(ctx context.Context, c *server.Conn, args [][]byte) 
 // a live non-Hash key replies WRONGTYPE.
 func (r *Router) handleHExists(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	_, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
@@ -507,7 +507,7 @@ func (r *Router) handleHExists(ctx context.Context, c *server.Conn, args [][]byt
 // key replies WRONGTYPE.
 func (r *Router) handleHLen(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	m, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
@@ -531,7 +531,7 @@ func (r *Router) handleHLen(ctx context.Context, c *server.Conn, args [][]byte) 
 // non-Hash key replies WRONGTYPE.
 func (r *Router) handleHStrlen(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	_, live, wrongType, err := r.hashState(ctx, pk)
 	if err != nil {
@@ -576,7 +576,7 @@ func (r *Router) handleHIncrBy(ctx context.Context, c *server.Conn, args [][]byt
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	if !r.ensureHashWritable(ctx, c, pk, key, [][]byte{field}, nil) {
 		return
 	}
@@ -615,7 +615,7 @@ func (r *Router) handleHIncrByFloat(ctx context.Context, c *server.Conn, args []
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	if !r.ensureHashWritable(ctx, c, pk, key, [][]byte{field}, nil) {
 		return
 	}
@@ -656,7 +656,7 @@ func (r *Router) handleHIncrByFloat(ctx context.Context, c *server.Conn, args []
 // treats an absent key as an empty hash.
 func (r *Router) handleHScan(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	// The cursor is a Redis uint64. A value that does not parse is treated as an
 	// invalid cursor (the "restart scan" contract), not a syntax error, matching

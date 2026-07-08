@@ -279,14 +279,20 @@ func TestSelectZeroIsOK(t *testing.T) {
 	}
 }
 
-func TestSelectNonZeroWithoutMultiDBRejected(t *testing.T) {
+func TestSelectNonZeroWithoutMultiDBAliasesToDB0(t *testing.T) {
 	conn, r := startConnServer(t, Config{})
-	// Requirement 2.8: non-zero SELECT with multi-DB disabled is rejected.
-	want := "-ERR invalid DB index"
-	for _, cmd := range []string{"SELECT 1", "SELECT 5"} {
-		if got := sendRead(t, conn, r, cmd); got != want {
-			t.Errorf("%q = %q, want %q", cmd, got, want)
+	// Single-DB mode (multi-DB disabled): every NON-NEGATIVE SELECT is accepted and
+	// aliases to db0 — all DB indexes point at the one shared keyspace. (Previously a
+	// non-zero SELECT was rejected; the user-approved design changed it to
+	// accept-and-alias so a client that blindly issues SELECT n keeps working.)
+	for _, cmd := range []string{"SELECT 0", "SELECT 1", "SELECT 5", "SELECT 15", "SELECT 999"} {
+		if got, want := sendRead(t, conn, r, cmd), "+OK"; got != want {
+			t.Errorf("%q = %q, want %q (single-db aliases to db0)", cmd, got, want)
 		}
+	}
+	// A negative index is still an error.
+	if got, want := sendRead(t, conn, r, "SELECT -1"), "-ERR invalid DB index"; got != want {
+		t.Errorf("SELECT -1 = %q, want %q", got, want)
 	}
 }
 

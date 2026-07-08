@@ -53,7 +53,7 @@ func (r *Router) handleGetBit(ctx context.Context, c *server.Conn, args [][]byte
 		return
 	}
 
-	cur, found, wrongType, err := r.readCurrentString(ctx, encodePK(c.DB(), args[1]))
+	cur, found, wrongType, err := r.readCurrentString(ctx, r.encodePK(c.DB(), args[1]))
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -86,7 +86,7 @@ func (r *Router) handleSetBit(ctx context.Context, c *server.Conn, args [][]byte
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	var oldBit int
 	_, err := r.rmwString(ctx, pk, func(base []byte) ([]byte, error) {
 		byteIdx := int(offset / 8)
@@ -124,7 +124,7 @@ func (r *Router) handleSetBit(ctx context.Context, c *server.Conn, args [][]byte
 // the end). Replies the number of set bits.
 func (r *Router) handleBitCount(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	cur, found, wrongType, err := r.readCurrentString(ctx, encodePK(c.DB(), args[1]))
+	cur, found, wrongType, err := r.readCurrentString(ctx, r.encodePK(c.DB(), args[1]))
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -196,7 +196,7 @@ func (r *Router) handleBitPos(ctx context.Context, c *server.Conn, args [][]byte
 	}
 	bit := int(bitLL)
 
-	cur, found, wrongType, err := r.readCurrentString(ctx, encodePK(c.DB(), args[1]))
+	cur, found, wrongType, err := r.readCurrentString(ctx, r.encodePK(c.DB(), args[1]))
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -281,7 +281,7 @@ func (r *Router) handleBitOp(ctx context.Context, c *server.Conn, args [][]byte)
 	srcs := make([][]byte, len(srcArgs))
 	maxLen := 0
 	for i, sk := range srcArgs {
-		v, found, wrongType, err := r.readCurrentString(ctx, encodePK(c.DB(), sk))
+		v, found, wrongType, err := r.readCurrentString(ctx, r.encodePK(c.DB(), sk))
 		if err != nil {
 			r.writeStoreError(c, err)
 			return
@@ -301,7 +301,7 @@ func (r *Router) handleBitOp(ctx context.Context, c *server.Conn, args [][]byte)
 
 	result := bitopCompute(op, srcs, maxLen)
 
-	destPK := encodePK(c.DB(), destKey)
+	destPK := r.encodePK(c.DB(), destKey)
 	if len(result) == 0 {
 		// Redis deletes the destination when the result is empty.
 		if _, err := r.Storage.Meta.DeleteMeta(ctx, destPK); err != nil {

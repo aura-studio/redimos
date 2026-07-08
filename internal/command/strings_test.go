@@ -324,7 +324,7 @@ func (s *fakeStringStore) IncrByFloat(_ context.Context, pk string, delta float6
 // sensitive tests pin "now".
 func startStringServer(t *testing.T, store storage.Store, now func() int64) (net.Conn, *bufio.Reader) {
 	t.Helper()
-	r := NewRouterWithStorage(Config{}, Storage{Store: store, Now: now})
+	r := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: store, Now: now})
 	s := server.New(server.Options{Addr: "127.0.0.1:0"}, r)
 	signal := make(chan error, 1)
 	go func() { _ = s.ListenServeAndSignal(signal) }()
@@ -663,13 +663,26 @@ func TestStringArityErrors(t *testing.T) {
 	}
 }
 
-// TestEncodePK documents the pk encoding used by every data-command family.
+// TestEncodePK documents the mode-aware pk encoding used by every data-command
+// family: single-db (raw keys) vs multi-db (uniform "{db}:" prefix).
 func TestEncodePK(t *testing.T) {
-	if got, want := encodePK(0, []byte("foo")), "0:foo"; got != want {
-		t.Errorf("encodePK(0, foo) = %q, want %q", got, want)
+	// Multi-DB mode: pk = "{db}:{key}".
+	rm := &Router{Config: Config{MultiDB: true}}
+	if got, want := rm.encodePK(0, []byte("foo")), "0:foo"; got != want {
+		t.Errorf("multi-db encodePK(0, foo) = %q, want %q", got, want)
 	}
-	if got, want := encodePK(3, []byte("foo")), "3:foo"; got != want {
-		t.Errorf("encodePK(3, foo) = %q, want %q", got, want)
+	if got, want := rm.encodePK(3, []byte("foo")), "3:foo"; got != want {
+		t.Errorf("multi-db encodePK(3, foo) = %q, want %q", got, want)
+	}
+
+	// Single-DB mode: pk = raw key, no prefix; the db argument is ignored (every DB
+	// aliases to the one shared keyspace).
+	rs := &Router{Config: Config{MultiDB: false}}
+	if got, want := rs.encodePK(0, []byte("foo")), "foo"; got != want {
+		t.Errorf("single-db encodePK(0, foo) = %q, want %q", got, want)
+	}
+	if got, want := rs.encodePK(3, []byte("foo")), "foo"; got != want {
+		t.Errorf("single-db encodePK(3, foo) = %q, want %q (db ignored)", got, want)
 	}
 }
 

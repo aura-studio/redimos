@@ -202,7 +202,7 @@ func (r *Router) rmwString(ctx context.Context, pk string, compute func(base []b
 func (r *Router) handleAppend(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	key, val := args[1], args[2]
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	newLen, err := r.rmwString(ctx, pk, func(base []byte) ([]byte, error) {
 		// Compute the appended result. A fresh slice keeps base's backing array
@@ -247,7 +247,7 @@ func (r *Router) handleSetRange(ctx context.Context, c *server.Conn, args [][]by
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	// An empty value never creates or grows the key; it just reports the current
 	// length (Redis SETRANGE semantics). No write, so no read-modify-write is

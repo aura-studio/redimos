@@ -12,7 +12,7 @@ import (
 // replies WRONGTYPE.
 func (r *Router) handleZCard(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	m, live, wrongType, err := r.zsetState(ctx, pk)
 	if err != nil {
@@ -50,7 +50,7 @@ func (r *Router) handleZRevRange(ctx context.Context, c *server.Conn, args [][]b
 // array; a live non-ZSet key replies WRONGTYPE.
 func (r *Router) handleZRangeByRank(ctx context.Context, c *server.Conn, args [][]byte, rev bool) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	start, err := ParseInt(args[2])
 	if err != nil {
@@ -115,7 +115,7 @@ func (r *Router) handleZRevRank(ctx context.Context, c *server.Conn, args [][]by
 // handleZRankDir is the shared implementation of ZRANK / ZREVRANK.
 func (r *Router) handleZRankDir(ctx context.Context, c *server.Conn, args [][]byte, rev bool) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	_, live, wrongType, err := r.zsetState(ctx, pk)
 	if err != nil {

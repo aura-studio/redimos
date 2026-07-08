@@ -20,23 +20,45 @@ import (
 // encoding, existence check and error mapping.
 
 // encodePK encodes a logical key into its DynamoDB partition key for the given
-// selected database. The pk is "{db}:{key}" — the decimal db index, a ':', then the
-// key bytes verbatim (so binary-safe key names round-trip). The uniform "{n}:"
-// prefix (db 0 -> "0:", db 1 -> "1:", ...) is collision-free: the ':' terminates the
-// number, so one db's prefix is never a prefix of another's ("1:" is not a prefix of
-// "12:"), and a db-0 key that happens to look like "1:foo" encodes to "0:1:foo",
-// distinct from db-1's "1:foo".
-func encodePK(db int, key []byte) string {
+// selected database. It is MODE-AWARE:
+//
+//   - Single-DB (Config.MultiDB == false, the default): the pk is the RAW key
+//     bytes with NO prefix. Every DB index aliases to the one shared keyspace (see
+//     handleSelect), so no db discriminator is stored. The db argument is ignored.
+//   - Multi-DB (Config.MultiDB == true): the pk is "{db}:{key}" — the decimal db
+//     index, a ':', then the key bytes verbatim (so binary-safe key names round-
+//     trip). The uniform "{n}:" prefix (db 0 -> "0:", db 1 -> "1:", ...) is
+//     collision-free: the ':' terminates the number, so one db's prefix is never a
+//     prefix of another's ("1:" is not a prefix of "12:"), and a db-0 key that
+//     happens to look like "1:foo" encodes to "0:1:foo", distinct from db-1's
+//     "1:foo".
+//
+// The two modes intentionally produce incompatible layouts (raw vs prefixed); data
+// written under one mode is not visible under the other.
+func (r *Router) encodePK(db int, key []byte) string {
+	if !r.Config.MultiDB {
+		return string(key)
+	}
+
 	return strconv.Itoa(db) + ":" + string(key)
 }
 
-// decodePK reverses encodePK: it strips the "{db}:" partition-key prefix for the
-// selected database, returning the logical key name and ok=true when pk belongs to
-// that database. A pk that does not carry the expected prefix (i.e. it belongs to a
-// different database) returns ok=false so SCAN can filter the keyspace to the
-// connection's selected db. The key bytes after the prefix are returned verbatim so
-// binary-safe key names — including names that themselves contain ':' — round-trip.
-func decodePK(db int, pk string) (string, bool) {
+// decodePK reverses encodePK for the selected database, returning the logical key
+// name and ok=true when pk belongs to that database. It is MODE-AWARE:
+//
+//   - Single-DB: pks are raw keys with no prefix, so every pk belongs to the shared
+//     keyspace — the pk is returned verbatim with ok=true (the db argument is
+//     ignored). SCAN therefore surfaces raw key names unfiltered.
+//   - Multi-DB: it strips the "{db}:" partition-key prefix. A pk that does not carry
+//     the expected prefix (i.e. it belongs to a different database) returns
+//     ok=false so SCAN filters the keyspace to the connection's selected db. The key
+//     bytes after the prefix are returned verbatim so binary-safe key names —
+//     including names that themselves contain ':' — round-trip.
+func (r *Router) decodePK(db int, pk string) (string, bool) {
+	if !r.Config.MultiDB {
+		return pk, true
+	}
+
 	prefix := strconv.Itoa(db) + ":"
 
 	if !strings.HasPrefix(pk, prefix) {

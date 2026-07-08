@@ -14,7 +14,7 @@ import (
 // absent. A live non-ZSet key replies WRONGTYPE.
 func (r *Router) handleZScore(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	_, live, wrongType, err := r.zsetState(ctx, pk)
 	if err != nil {
@@ -63,7 +63,7 @@ func (r *Router) handleZIncrBy(ctx context.Context, c *server.Conn, args [][]byt
 	}
 	member := args[3]
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	if err := guard.CheckWrite(key, [][]byte{member}, nil); err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -94,7 +94,7 @@ func (r *Router) handleZIncrBy(ctx context.Context, c *server.Conn, args [][]byt
 // non-ZSet key replies WRONGTYPE; a bad bound replies the min-or-max error.
 func (r *Router) handleZCount(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	min, ok := parseScoreBound(args[2])
 	if !ok {
@@ -152,7 +152,7 @@ func (r *Router) handleZRevRangeByScore(ctx context.Context, c *server.Conn, arg
 // min-or-max error.
 func (r *Router) zRangeByScore(ctx context.Context, c *server.Conn, args [][]byte, rev bool) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	first, ok := parseScoreBound(args[2])
 	if !ok {

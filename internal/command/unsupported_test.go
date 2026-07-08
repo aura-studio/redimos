@@ -72,7 +72,7 @@ func TestUnsupportedCommandsRejectedWithUnknownCommand(t *testing.T) {
 // (Streams) stay unregistered on a fully wired router, so they keep reaching the
 // oracle-correct unknown-command rejection.
 func TestUnsupportedCommandsNotRegistered(t *testing.T) {
-	r := NewRouterWithStorage(Config{}, Storage{Store: newFakeStringStore(), Now: fixedNow(1000)})
+	r := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: newFakeStringStore(), Now: fixedNow(1000)})
 
 	for _, name := range UnsupportedCommands {
 		if spec, ok := r.Table.Lookup(name); ok {
@@ -156,7 +156,7 @@ func TestRejectedFamiliesReturnDedicatedError(t *testing.T) {
 // take the dedicated-rejection path, not the unknown-command path) with their real
 // Redis 3.2 arities, so a mis-shaped call still returns the standard arity error.
 func TestRejectedFamiliesRegistered(t *testing.T) {
-	r := NewRouterWithStorage(Config{}, Storage{Store: newFakeStringStore(), Now: fixedNow(1000)})
+	r := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: newFakeStringStore(), Now: fixedNow(1000)})
 
 	for _, name := range []string{
 		"SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE", "PUBLISH", "PUBSUB",

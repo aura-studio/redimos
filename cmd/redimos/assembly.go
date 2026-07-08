@@ -32,6 +32,19 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// isAddrInUse reports whether err is a listener bind failure because the address is
+// already in use, so the caller can auto-select a free port instead of failing.
+func isAddrInUse(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		var sysErr *os.SyscallError
+		if errors.As(opErr.Err, &sysErr) {
+			return errors.Is(sysErr.Err, syscall.EADDRINUSE)
+		}
+	}
+	return false
+}
+
 // run performs the full assembly and blocks serving until a shutdown signal is
 // received, then tears everything down cleanly. It returns a non-nil error only
 // for a fatal startup failure.
@@ -64,6 +77,56 @@ func run(cfg appConfig) error {
 	if cfg.region != "" {
 		loadOpts = append(loadOpts, config.WithRegion(cfg.region))
 	}
+
+	// DynamoDB connection (rocket-nano style). An endpoint field set installs an
+	// endpoint resolver pinning the DynamoDB service to the configured
+	// url/partitionID/signingRegion; a credential field set installs a static
+	// credentials provider. When neither is set the AWS SDK default credential/
+	// region chain is used (env AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN, profile,
+	// IAM role) — mode ③.
+	endpointSet := cfg.endpointURL != "" || cfg.endpointPartitionID != ""
+	if endpointSet {
+		loadOpts = append(loadOpts, config.WithEndpointResolverWithOptions(
+			aws.EndpointResolverWithOptionsFunc(
+				func(service, _ string, _ ...interface{}) (aws.Endpoint, error) {
+					if service == dynamodb.ServiceID {
+						return aws.Endpoint{
+							URL:           cfg.endpointURL,
+							PartitionID:   cfg.endpointPartitionID,
+							SigningRegion: cfg.region,
+						}, nil
+					}
+					return aws.Endpoint{}, &aws.EndpointNotFoundError{}
+				},
+			),
+		))
+	}
+
+	credSet := cfg.credAccessKeyID != "" || cfg.credSecretAccessKey != "" ||
+		cfg.credSessionToken != ""
+	// Mode ① convenience: a local dynamodb-local endpoint with no credentials given —
+	// inject dummy static credentials so the SDK does not fail with "no credentials"
+	// and a bare -endpoint-url just works.
+	if endpointSet && !credSet {
+		cfg.credAccessKeyID = "dummy"
+		cfg.credSecretAccessKey = "dummy"
+		credSet = true
+	}
+	if credSet {
+		loadOpts = append(loadOpts, config.WithCredentialsProvider(
+			aws.CredentialsProviderFunc(
+				func(context.Context) (aws.Credentials, error) {
+					return aws.Credentials{
+						AccessKeyID:     cfg.credAccessKeyID,
+						SecretAccessKey: cfg.credSecretAccessKey,
+						SessionToken:    cfg.credSessionToken,
+						Source:          "redimos",
+					}, nil
+				},
+			),
+		))
+	}
+
 	awsCfg, err := config.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)
@@ -78,11 +141,7 @@ func run(cfg appConfig) error {
 	registry := prometheus.NewRegistry()
 	dynamoObs := metrics.NewDynamoObserver(registry)
 
-	ddb := dynamodb.NewFromConfig(awsCfg, func(o *dynamodb.Options) {
-		if cfg.dynamoEndpoint != "" {
-			o.BaseEndpoint = aws.String(cfg.dynamoEndpoint)
-		}
-	}, ddbobs.WithObservability(dynamoObs))
+	ddb := dynamodb.NewFromConfig(awsCfg, ddbobs.WithObservability(dynamoObs))
 
 	// Fail fast: confirm the backend is reachable, the table exists, and credentials
 	// are valid BEFORE serving, instead of binding the RESP listener and then erroring
@@ -191,7 +250,7 @@ func run(cfg appConfig) error {
 	// --- command: storage-backed router ------------------------------------
 	router := command.NewRouterWithStorage(
 		command.Config{
-			RequirePass:         cfg.requirepass,
+			RequirePass: cfg.requirepass,
 			MultiDB:             cfg.multiDB,
 			Databases:           cfg.databases,
 			MaxCollectionResult: cfg.maxCollectionResult,
@@ -274,11 +333,20 @@ func run(cfg appConfig) error {
 	// is already in use) is fatal at startup and surfaced to the operator — exactly
 	// like the RESP listener below — instead of being logged from a goroutine while the
 	// proxy runs on with no /metrics, /healthz or /readyz (a silent observability loss
-	// that also hides the readiness gate from the orchestrator).
+	// that also hides the readiness gate from the orchestrator). Exception: an
+	// address-already-in-use collision (e.g. several instances on one host) auto-falls
+	// back to an OS-selected free port (":0") so observability survives; the actual
+	// bound port is logged below. Other bind errors (permission, invalid address)
+	// remain fatal.
 	metricsLn, err := net.Listen("tcp", cfg.metricsAddr)
+	if err != nil && isAddrInUse(err) {
+		log.Printf("redimos: metrics address %s in use — auto-selecting a free port", cfg.metricsAddr)
+		metricsLn, err = net.Listen("tcp", ":0")
+	}
 	if err != nil {
 		return fmt.Errorf("bind metrics endpoint %s: %w", cfg.metricsAddr, err)
 	}
+	metricsAddr := metricsLn.Addr().String()
 	go func() {
 		if err := httpSrv.Serve(metricsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("redimos: metrics endpoint error: %v", err)
@@ -294,7 +362,7 @@ func run(cfg appConfig) error {
 	}
 
 	log.Printf("redimos serving: addr=%s metrics=%s table=%s inst=%s consistency=%s auth=%t multi-db=%t",
-		cfg.addr, cfg.metricsAddr, cfg.table, instID, cfg.consistency, cfg.requirepass != "", cfg.multiDB)
+		cfg.addr, metricsAddr, cfg.table, instID, cfg.consistency, cfg.requirepass != "", cfg.multiDB)
 
 	// Block until a signal cancels ctx or the listener fails.
 	select {
