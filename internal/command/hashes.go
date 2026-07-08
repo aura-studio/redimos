@@ -64,10 +64,11 @@ func (r *Router) registerHashes() {
 	r.reg("HLEN", 2, false, r.handleHLen)
 	r.reg("HINCRBY", 4, true, r.handleHIncrBy)
 	r.reg("HINCRBYFLOAT", 4, true, r.handleHIncrByFloat)
-	// v1 line GATE: HSTRLEN and HSCAN are NOT registered → "ERR unknown command
-	// '<name>'". HSTRLEN has no dedicated rv1 primitive and HSCAN has no within-
-	// partition cursor scan in rv1. handleHStrlen/handleHScan stay compiled but
-	// unreachable.
+	// v1 line (redimo v1.7.2): HSCAN is registered — it reads the whole hash via rv1's
+	// HGETALL and returns it as a single terminal page (cursor 0), so a Redis GUI can
+	// open a hash key. HSTRLEN stays GATED → "ERR unknown command 'hstrlen'" (no
+	// dedicated rv1 field-length primitive); handleHStrlen stays compiled but unreachable.
+	r.reg("HSCAN", -3, false, r.handleHScan)
 }
 
 // hashState is the outcome of loading a key's meta for a Hash command: whether it

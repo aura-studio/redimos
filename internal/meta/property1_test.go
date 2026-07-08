@@ -375,3 +375,7 @@ func TestProperty1TypeConsistency(t *testing.T) {
 		t.Errorf("Property 1 (type consistency) failed: %v", err)
 	}
 }
+
+func (s *prop1Store) KeyType(_ context.Context, _ string) (string, bool, error) {
+	return "", false, nil
+}

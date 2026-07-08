@@ -862,3 +862,7 @@ func TestConcurrentSPopUniqueness(t *testing.T) {
 		}
 	}
 }
+
+func (s *syncStore) KeyType(_ context.Context, _ string) (string, bool, error) {
+	return "", false, nil
+}

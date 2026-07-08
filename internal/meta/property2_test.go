@@ -315,3 +315,7 @@ func TestProperty2_ExpiredIndependentOfNativeTTL(t *testing.T) {
 		}
 	}
 }
+
+func (s prop2Store) KeyType(_ context.Context, _ string) (string, bool, error) {
+	return "", false, nil
+}

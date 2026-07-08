@@ -140,6 +140,11 @@ func (t *throttleStore) LoadMeta(ctx context.Context, pk string) (Meta, bool, er
 	return m, found, t.obs(err)
 }
 
+func (t *throttleStore) KeyType(ctx context.Context, pk string) (string, bool, error) {
+	typeName, found, err := t.inner.KeyType(ctx, pk)
+	return typeName, found, t.obs(err)
+}
+
 func (t *throttleStore) SetExpire(ctx context.Context, pk string, expEpoch int64) (bool, error) {
 	found, err := t.inner.SetExpire(ctx, pk, expEpoch)
 	return found, t.obs(err)

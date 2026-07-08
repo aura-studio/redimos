@@ -36,18 +36,24 @@ func (r *Router) registerKeys() {
 	// to update, so it is byte-for-byte identical to EXISTS (existence count with
 	// multiplicity), matching Redis 3.2's reply.
 	r.reg("TOUCH", -2, false, r.handleExists)
-	// v1 line GATE: TYPE, the EXPIRE/TTL/PERSIST family, SCAN, KEYS and
-	// RENAME/RENAMENX are NOT registered. redimo v1.6.1 has no type tag and no TTL
-	// machinery, and no keyspace iterator, so these have no backing; leaving them
-	// UNREGISTERED makes Dispatch reply "ERR unknown command '<name>'" (the required
-	// GATE behaviour). Their handlers below remain compiled but unreachable.
-	//   TYPE / EXPIRE / EXPIREAT / PEXPIRE / PEXPIREAT / TTL / PTTL / PERSIST
-	//   SCAN / KEYS / RENAME / RENAMENX
-	// FLUSHALL / FLUSHDB stay registered as a first-class proxy rejection (they are
-	// NOT on the v1 GATE list): flushing would wipe the whole shared DynamoDB table.
-	// FLUSHALL / FLUSHDB are registered only to give them a first-class proxy
-	// rejection rather than the generic "unknown command" reply: flushing the
-	// keyspace would mean a full wipe of the shared DynamoDB table. Arity 1 matches
+	// v1 line (redimo v1.7.2): TYPE, TTL/PTTL and SCAN are backed by rv1.7's read-only
+	// introspection primitives (Client.TypeOf / Client.ScanKeys) and are registered so
+	// a Redis GUI (key tree + per-key type + TTL column) works against the v1 line.
+	// TTL/PTTL reply -1 for every live key (rv1 stores no expiry) and -2 for a missing
+	// one — which replyTTL already derives from LoadMeta's Exp==0, no special-casing.
+	r.reg("TYPE", 2, false, r.handleType)
+	r.reg("TTL", 2, false, r.handleTTL)
+	r.reg("PTTL", 2, false, r.handlePTTL)
+	r.reg("SCAN", -2, false, r.handleScan)
+	// STILL GATED (no rv1 backing, or would mislead) → "ERR unknown command '<name>'":
+	//   EXPIRE / EXPIREAT / PEXPIRE / PEXPIREAT / PERSIST — rv1 has no TTL storage, so a
+	//     fake +OK would silently drop the requested expiry (a lie), worse than declining.
+	//   KEYS — an unbounded full-table scan; clients iterate via SCAN instead.
+	//   RENAME / RENAMENX — a whole-collection copy under a new pk, not supported in P0.
+	// Their handlers stay compiled but unreachable.
+	//
+	// FLUSHALL / FLUSHDB stay registered as a first-class proxy rejection (NOT on the
+	// GATE list): flushing would wipe the whole shared DynamoDB table. Arity 1 matches
 	// Redis 3.2 (the command takes no arguments).
 	r.reg("FLUSHALL", 1, true, r.handleFlush)
 	r.reg("FLUSHDB", 1, true, r.handleFlush)
@@ -183,17 +189,21 @@ func (r *Router) handleType(ctx context.Context, c *server.Conn, args [][]byte) 
 	w := resp.NewWriter(c.Redcon())
 	pk := r.encodePK(c.DB(), args[1])
 
-	m, found, err := r.Storage.Meta.Load(ctx, pk)
+	// v1 line: type is inferred by rv1.7's Client.TypeOf from item shape (there is no
+	// meta item / type tag), surfaced through Store.KeyType. TypeOf already returns the
+	// wire names ("string"/"list"/"set"/"zset"/"hash"), so no remapping is needed. rv1
+	// tracks no TTL, so there is no expiry to fold in — an existing key is its type.
+	typeName, found, err := r.Storage.Store.KeyType(ctx, pk)
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
 	}
-	if !found || meta.IsExpired(m, r.now()) {
+	if !found {
 		w.SimpleString("none")
 		return
 	}
 
-	w.SimpleString(redisTypeName(m.Type))
+	w.SimpleString(typeName)
 }
 
 // redisTypeName maps a meta KeyType to the Redis type name TYPE replies with. The

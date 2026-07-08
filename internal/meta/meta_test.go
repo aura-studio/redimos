@@ -382,3 +382,7 @@ func TestSetExpireAndPersist_PassThrough(t *testing.T) {
 		t.Fatalf("Persist = (%v, %v), want (false, nil)", found, err)
 	}
 }
+
+func (f *fakeStore) KeyType(_ context.Context, _ string) (string, bool, error) {
+	return "", false, nil
+}

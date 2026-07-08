@@ -1,7 +1,7 @@
 github.com/anishathalye/porcupine v1.3.0 h1:yo51Niv8Tg0tAAn5XOG2UVvJXUregK4WFuLrBRoowP8=
 github.com/anishathalye/porcupine v1.3.0/go.mod h1:WM0SsFjWNl2Y4BqHr/E/ll2yY1GY1jqn+W7Z/84Zoog=
-github.com/aura-studio/redimo v1.6.1 h1:q4VHp/Pih6qGj+IxLuL1ZY3Gw3BMmKO5Fj0QVWa2BTc=
-github.com/aura-studio/redimo v1.6.1/go.mod h1:x6TmBPowrURKupskDE5Lb8BbBOCGkb3QibEM7y1wz1I=
+github.com/aura-studio/redimo v1.7.2 h1:/QODJpuj7X4EgMc4tH6hoDTLrHaAHpjpcXM5H77jRxk=
+github.com/aura-studio/redimo v1.7.2/go.mod h1:x6TmBPowrURKupskDE5Lb8BbBOCGkb3QibEM7y1wz1I=
 github.com/aws/aws-sdk-go-v2 v1.17.3/go.mod h1:uzbQtefpm44goOPmdKyAlXSNcwlRgF3ePWVW6EtJvvw=
 github.com/aws/aws-sdk-go-v2 v1.42.1 h1:9eOTgu1z/dVtYpNZ3/8/XbbaX0x/BqE3HUzAzs6K0ek=
 github.com/aws/aws-sdk-go-v2 v1.42.1/go.mod h1:5pKeft2eJj+gElQ38Jqg4ibCqh+/AK33/0X3hip7IjM=

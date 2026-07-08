@@ -64,9 +64,10 @@ func (r *Router) registerSets() {
 	r.reg("SCARD", 2, false, r.handleSCard)
 	r.reg("SPOP", -2, true, r.handleSPop)
 	r.reg("SRANDMEMBER", -2, false, r.handleSRandMember)
-	// v1 line GATE: SSCAN is NOT registered → "ERR unknown command 'sscan'". redimo
-	// v1.6.1 exposes no paged single-partition member scan (SMEMBERS is unpaged, no
-	// cursor/LEK). handleSScan stays compiled but unreachable.
+	// v1 line (redimo v1.7.2): SSCAN is registered — it reads the whole set via rv1's
+	// SMEMBERS and returns it as a single terminal page (cursor 0), so a Redis GUI can
+	// open a set key.
+	r.reg("SSCAN", -3, false, r.handleSScan)
 	r.reg("SUNION", -2, false, r.handleSUnion)
 	r.reg("SINTER", -2, false, r.handleSInter)
 	r.reg("SDIFF", -2, false, r.handleSDiff)

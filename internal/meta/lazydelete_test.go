@@ -573,3 +573,7 @@ func TestLazyDelete_FullPipeline(t *testing.T) {
 		t.Fatalf("Reclaimed() = %d, want 4", got)
 	}
 }
+
+func (s *lazyStore) KeyType(_ context.Context, _ string) (string, bool, error) {
+	return "", false, nil
+}

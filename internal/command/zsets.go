@@ -73,10 +73,11 @@ func (r *Router) registerZSets() {
 	r.reg("ZREVRANK", 3, false, r.handleZRevRank)
 	r.reg("ZREMRANGEBYRANK", 4, true, r.handleZRemRangeByRank)
 	r.reg("ZREMRANGEBYSCORE", 4, true, r.handleZRemRangeByScore)
-	// v1 line GATE: ZSCAN is NOT registered → "ERR unknown command 'zscan'". redimo
-	// v1.6.1 has no within-partition paginated member scan with a cursor/LEK to bridge
-	// to Redis' SCAN cursor. handleZScan stays compiled but unreachable. (ZPOPMIN/
-	// ZPOPMAX/ZMSCORE were never registered.)
+	// v1 line (redimo v1.7.2): ZSCAN is registered — it reads the whole sorted set via
+	// rv1's ZRANGEBYSCORE(-inf,+inf) and returns it as a single terminal page (cursor
+	// 0), so a Redis GUI can open a zset key. handleZScan is now reachable. (ZPOPMIN/
+	// ZPOPMAX/ZMSCORE remain unregistered — post-3.2 commands.)
+	r.reg("ZSCAN", -3, false, r.handleZScan)
 	// ZRANGEBYLEX/ZREVRANGEBYLEX take an optional "LIMIT offset count" clause, so
 	// their arity is variadic (-4), matching Redis 3.2.
 	r.reg("ZRANGEBYLEX", -4, false, r.handleZRangeByLex)

@@ -136,6 +136,17 @@ func (s *redimoStore) LoadMeta(ctx context.Context, pk string) (Meta, bool, erro
 	return Meta{Type: "", Exp: 0, Count: n}, true, nil
 }
 
+// KeyType reports the Redis type of pk on the v1 line by delegating to rv1.7's
+// Client.TypeOf, which infers the type from item shape (rv1 stores no type tag): the
+// empty-SK string sentinel, the reserved list-metadata sibling, or the skN shape that
+// separates a set (random int63 marker) from a sorted set (score). found is false for
+// a missing key. It backs the (un-gated) TYPE command and performs only reads.
+// set-vs-zset is a documented heuristic (see redimo introspect.go); every other type
+// is distinguished exactly.
+func (s *redimoStore) KeyType(ctx context.Context, pk string) (string, bool, error) {
+	return s.client.TypeOf(pk)
+}
+
 // SetExpire is a no-op on the v1 line: rv1 has no TTL storage. It reports whether
 // the key exists so EXPIRE-style callers (all GATED) would see the right found
 // value if ever reached. It never persists an expiry.

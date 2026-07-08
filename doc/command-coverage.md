@@ -10,10 +10,17 @@
   `is disabled`、`invalid DB index`（后三者为设计内拒绝）→ **不可用**；其余（成功，或仅因
   本次入参触发 WRONGTYPE / 语法等**逐值**错误）→ **可用**（命令确实被路由与校验，只是不满意
   这组具体参数）。
-- **v1 门控远多于 v2**：v1（redimo v1.6.1）把 SCAN 家族、TTL/EXPIRE/PERSIST/TYPE、位操作
-  （SETBIT/GETBIT/BITCOUNT/BITPOS/BITOP/BITFIELD）、HyperLogLog（PFADD/PFCOUNT/PFMERGE）、
-  以及 SETRANGE/GETRANGE/STRLEN/SUBSTR/APPEND/SETEX/PSETEX、HSCAN/HSTRLEN、SSCAN/ZSCAN、
-  LINSERT 等**整批未注册**（回 `unknown command`），这些在 v2（redimo v2）上均已可用。
+- **v1 门控多于 v2**：v1（redimo v1.7.2）把位操作（SETBIT/GETBIT/BITCOUNT/BITPOS/BITOP/
+  BITFIELD）、HyperLogLog（PFADD/PFCOUNT/PFMERGE）、SETRANGE/GETRANGE/STRLEN/SUBSTR/APPEND/
+  SETEX/PSETEX、HSTRLEN、LINSERT，以及 EXPIRE/PERSIST/RENAME/KEYS 等**未注册**（回
+  `unknown command` 或设计内拒绝），这些在 v2（redimo v2）上均已可用。
+- **v1.7.2 新增只读内省（供 Redis 桌面管理器浏览键树）**：SCAN / TYPE / TTL / PTTL / HSCAN /
+  SSCAN / ZSCAN 已由 redimo v1.7.2 的**只读**原语接通（`Client.ScanKeys` 原始表扫描枚举 pk、
+  `Client.TypeOf` 按 item 形状判类型），**不改写入格式、不碰任何原有命令**，全兼容线上旧数据。
+  注意：① TTL/PTTL 对存在键恒返回 `-1`（v1 无过期机制），缺失键 `-2`；② TYPE 对
+  string/list/hash **精确**，对 **set 与 zset** 用 `skN` 量级启发式（v1.6.1/1.7.0 无类型标记、
+  两者共享存储无法逐项区分：set 成员是随机 int63、zset 是分数，~99% 准；极端情形——如分数全为
+  ≥2⁵² 大整数的 zset——可能判成 set，仅影响 GUI 查看器选择、不影响数据本身）。
 
 > 注：两条线共同的“不可用”几乎都是**真正的 Redis 3.2 之外或设计内拒绝**：Pub/Sub、事务
 > （MULTI/EXEC/WATCH/DISCARD）、Lua（EVAL/SCRIPT）、阻塞命令（BLPOP/BRPOP）、DUMP/RESTORE、
@@ -32,19 +39,19 @@
 
 ## v1（redimo v1.6.1）
 
-实测表 `redis-data-v1`（String 键）。**可用 90，不可用 63。**
+实测表 `redis-data-v1`（String 键）。**可用 97，不可用 56。**（v1.7.2 起 SCAN/TYPE/TTL/PTTL/HSCAN/SSCAN/ZSCAN 由不可用转为可用。）
 
 ### 可用（USABLE, 90）
 
 | 家族 | 数量 | 命令 |
 | --- | --- | --- |
 | strings | 12 | DECR, DECRBY, GET, GETSET, INCR, INCRBY, INCRBYFLOAT, MGET, MSET, MSETNX, SET, SETNX |
-| hashes | 13 | HDEL, HEXISTS, HGET, HGETALL, HINCRBY, HINCRBYFLOAT, HKEYS, HLEN, HMGET, HMSET, HSET, HSETNX, HVALS |
+| hashes | 14 | HDEL, HEXISTS, HGET, HGETALL, HINCRBY, HINCRBYFLOAT, HKEYS, HLEN, HMGET, HMSET, HSCAN, HSET, HSETNX, HVALS |
 | lists | 13 | LINDEX, LLEN, LPOP, LPUSH, LPUSHX, LRANGE, LREM, LSET, LTRIM, RPOP, RPOPLPUSH, RPUSH, RPUSHX |
-| sets | 14 | SADD, SCARD, SDIFF, SDIFFSTORE, SINTER, SINTERSTORE, SISMEMBER, SMEMBERS, SMOVE, SPOP, SRANDMEMBER, SREM, SUNION, SUNIONSTORE |
-| zsets | 20 | ZADD, ZCARD, ZCOUNT, ZINCRBY, ZINTERSTORE, ZLEXCOUNT, ZRANGE, ZRANGEBYLEX, ZRANGEBYSCORE, ZRANK, ZREM, ZREMRANGEBYLEX, ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREVRANGE, ZREVRANGEBYLEX, ZREVRANGEBYSCORE, ZREVRANK, ZSCORE, ZUNIONSTORE |
+| sets | 15 | SADD, SCARD, SDIFF, SDIFFSTORE, SINTER, SINTERSTORE, SISMEMBER, SMEMBERS, SMOVE, SPOP, SRANDMEMBER, SREM, SSCAN, SUNION, SUNIONSTORE |
+| zsets | 21 | ZADD, ZCARD, ZCOUNT, ZINCRBY, ZINTERSTORE, ZLEXCOUNT, ZRANGE, ZRANGEBYLEX, ZRANGEBYSCORE, ZRANK, ZREM, ZREMRANGEBYLEX, ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREVRANGE, ZREVRANGEBYLEX, ZREVRANGEBYSCORE, ZREVRANK, ZSCAN, ZSCORE, ZUNIONSTORE |
 | geo | 6 | GEOADD, GEODIST, GEOHASH, GEOPOS, GEORADIUS, GEORADIUSBYMEMBER |
-| generic | 3 | DEL, EXISTS, TOUCH |
+| generic | 7 | DEL, EXISTS, PTTL, SCAN, TOUCH, TTL, TYPE |
 | connection | 9 | CLIENT, COMMAND, CONFIG, DBSIZE, ECHO, INFO, PING, SELECT, TIME |
 
 ### 不可用（NOT-USABLE, 63）
@@ -52,12 +59,12 @@
 | 家族 | 数量 | 命令（原因） |
 | --- | --- | --- |
 | strings | 15 | APPEND, BITCOUNT, BITFIELD, BITOP, BITPOS, GETBIT, GETDEL, GETEX, GETRANGE, PSETEX, SETBIT, SETEX, SETRANGE, STRLEN, SUBSTR — 全部 `unknown command`（未注册；GETDEL/GETEX 为 Redis 6+，其余为 v1 线整批门控） |
-| hashes | 3 | HRANDFIELD, HSCAN, HSTRLEN — `unknown command`（HRANDFIELD 为 Redis 6.2；HSCAN/HSTRLEN 为 v1 门控） |
+| hashes | 2 | HRANDFIELD（Redis 6.2）, HSTRLEN（v1 门控，无字段长度原语）— `unknown command` |
 | lists | 4 | BLPOP, BRPOP — 设计内拒绝（阻塞命令不支持）；LINSERT, LMOVE — `unknown command`（LINSERT v1 门控；LMOVE 为 Redis 6.2） |
-| sets | 2 | SMISMEMBER（Redis 6.2）, SSCAN（v1 门控）— `unknown command` |
-| zsets | 5 | ZMSCORE（Redis 6.2）, ZPOPMAX/ZPOPMIN（Redis 5.0）, ZRANDMEMBER（Redis 6.2）, ZSCAN（v1 门控）— `unknown command` |
+| sets | 1 | SMISMEMBER（Redis 6.2）— `unknown command` |
+| zsets | 4 | ZMSCORE（Redis 6.2）, ZPOPMAX/ZPOPMIN（Redis 5.0）, ZRANDMEMBER（Redis 6.2）— `unknown command` |
 | geo | 1 | GEOSEARCH（Redis 6.2）— `unknown command` |
-| generic | 19 | EXPIRE, EXPIREAT, PEXPIRE, PEXPIREAT, PERSIST, PTTL, TTL, TYPE, SCAN, KEYS, RENAME, RENAMENX, COPY, UNLINK — `unknown command`（TTL/EXPIRE/TYPE/SCAN/KEYS/RENAME 为 v1 门控；COPY/UNLINK 为 Redis 6+）；DUMP, RESTORE, OBJECT, MOVE, RANDOMKEY — 设计内拒绝（`not supported`） |
+| generic | 15 | EXPIRE, EXPIREAT, PEXPIRE, PEXPIREAT, PERSIST, KEYS, RENAME, RENAMENX, COPY, UNLINK — `unknown command`（EXPIRE 家族/PERSIST：v1 无 TTL 存储，注册会撒谎故**仍门控**；KEYS/RENAME：v1 门控；COPY/UNLINK 为 Redis 6+）；DUMP, RESTORE, OBJECT, MOVE, RANDOMKEY — 设计内拒绝（`not supported`）。**注：TTL/PTTL/TYPE/SCAN 已在 v1.7.2 转为可用（见上表）** |
 | hll | 3 | PFADD, PFCOUNT, PFMERGE — `unknown command`（v1 门控） |
 | connection | 3 | FLUSHDB, FLUSHALL — 设计内拒绝（`is disabled`，会清空整表）；HELLO — `unknown command`（回退 RESP2） |
 | pubsub/txn/script | 8 | SUBSCRIBE, PUBLISH（Pub/Sub 不支持）；MULTI, EXEC, DISCARD, WATCH（事务不支持）；EVAL, SCRIPT（Lua 不支持）— 全部设计内拒绝（`not supported`） |

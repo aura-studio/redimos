@@ -1984,3 +1984,7 @@ func (s *fakeStringStore) ScanKeys(_ context.Context, lek map[string]types.Attri
 	}
 	return pks[start:end], next, nil
 }
+
+func (s *fakeStringStore) KeyType(_ context.Context, _ string) (string, bool, error) {
+	return "", false, nil
+}

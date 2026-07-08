@@ -187,6 +187,13 @@ type Store interface {
 	// absent (no meta item).
 	LoadMeta(ctx context.Context, pk string) (meta Meta, found bool, err error)
 
+	// KeyType reports the Redis type name of pk ("string"/"list"/"set"/"zset"/
+	// "hash") and whether it exists (found=false → the key is absent). It backs the
+	// TYPE command. On the v1 line the type is inferred from item shape by rv1.7's
+	// Client.TypeOf (there is no type tag); set-vs-zset is a documented heuristic,
+	// every other type exact. It performs only reads.
+	KeyType(ctx context.Context, pk string) (typeName string, found bool, err error)
+
 	// SetExpire writes exp (epoch seconds) on an existing key's meta item. found is
 	// false when the key has no meta item (→ EXPIRE returns :0).
 	SetExpire(ctx context.Context, pk string, expEpoch int64) (found bool, err error)
