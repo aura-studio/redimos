@@ -113,7 +113,9 @@ func TestSetCountConsistencyProperty(t *testing.T) {
 		// the clean-slate state the count invariant is asserted against.
 		model := []map[string]struct{}{{}, {}}
 		for _, key := range setCountKeys {
-			pk := encodePK(0, []byte(key))
+			// The server runs in multi-db mode (startStringServer → Config{MultiDB:
+			// true}), so the pk carries the "0:" prefix.
+			pk := "0:" + key
 			delete(store.sets, pk)
 			delete(store.metas, pk)
 			delete(store.live, pk)

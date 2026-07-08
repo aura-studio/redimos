@@ -78,7 +78,9 @@ func TestSetOverwriteReclaimsForeignMembers(t *testing.T) {
 	// The old set members must be physically reclaimed, not left as invisible orphans
 	// (the async deleter's IsLive guard + SweepOrphans would both skip them once the
 	// String meta lands, so the overwrite path must delete them synchronously).
-	pk := encodePK(0, []byte("k"))
+	// This test's server runs in multi-db mode (startStringServer → Config{MultiDB:
+	// true}), so the pk carries the "0:" prefix.
+	pk := "0:k"
 	if n := len(store.sets[pk]); n != 0 {
 		t.Fatalf("SET over a set left %d orphan members under %q, want 0", n, pk)
 	}
@@ -106,7 +108,9 @@ func TestSetNXOverExpiredForeignTypeReclaims(t *testing.T) {
 	if got := sendRead(t, conn, r, "GET k"); got != "$v" {
 		t.Fatalf("GET k = %q, want $v", got)
 	}
-	pk := encodePK(0, []byte("k"))
+	// This test's server runs in single-db mode (startStringServerCfg with Config{}),
+	// so the pk is the raw key with no prefix.
+	pk := "k"
 	if n := len(store.sets[pk]); n != 0 {
 		t.Fatalf("SET NX over an expired set left %d ghost members under %q, want 0", n, pk)
 	}

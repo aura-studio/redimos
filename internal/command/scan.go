@@ -117,7 +117,7 @@ func (r *Router) handleScan(ctx context.Context, c *server.Conn, args [][]byte) 
 	db := c.DB()
 	out := make([][]byte, 0, len(keys))
 	for _, pk := range keys {
-		key, ok := decodePK(db, pk)
+		key, ok := r.decodePK(db, pk)
 		if !ok {
 			continue
 		}

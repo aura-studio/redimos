@@ -74,7 +74,7 @@ type strData struct {
 // "$-1".
 func (r *Router) handleGet(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	// A live key of a non-String type must reply WRONGTYPE, not the null bulk
 	// string — GET is type-checked from the key's meta exactly like its String
@@ -138,7 +138,7 @@ func (r *Router) handleSet(ctx context.Context, c *server.Conn, args [][]byte) {
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	// SET NX: atomically claim a logically-absent (or expired) key. The single
 	// conditional meta write is the concurrency-safe gate — racing SET NX callers
@@ -232,7 +232,7 @@ func (r *Router) handleSetNX(ctx context.Context, c *server.Conn, args [][]byte)
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	// Atomically claim the key only if it is logically absent (or expired). This
 	// single conditional meta write replaces a read-then-write existence check, so
@@ -299,7 +299,7 @@ func (r *Router) setWithExpiry(ctx context.Context, c *server.Conn, key, val, ex
 		expEpoch = secExpiryEpoch(now, n)
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	if err := r.overwriteAnyType(ctx, pk); err != nil {
 		r.writeStoreError(c, err)
@@ -335,7 +335,7 @@ func (r *Router) handleGetSet(ctx context.Context, c *server.Conn, args [][]byte
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 		r.writeStoreError(c, err)
@@ -384,7 +384,7 @@ func (r *Router) handleMGet(ctx context.Context, c *server.Conn, args [][]byte) 
 	liveStr := make([]bool, len(keys))
 	toFetch := make([]string, 0, len(keys))
 	for i, key := range keys {
-		pk := encodePK(c.DB(), key)
+		pk := r.encodePK(c.DB(), key)
 		pks[i] = pk
 
 		m, found, err := r.Storage.Meta.Load(ctx, pk)
@@ -464,7 +464,7 @@ func (r *Router) handleMSet(ctx context.Context, c *server.Conn, args [][]byte) 
 		}
 		for i := start; i < end; i += 2 {
 			key, val := pairs[i], pairs[i+1]
-			pk := encodePK(c.DB(), key)
+			pk := r.encodePK(c.DB(), key)
 
 			if err := r.overwriteAnyType(ctx, pk); err != nil {
 				r.writeStoreError(c, err)
@@ -514,7 +514,7 @@ func (r *Router) handleMSetNX(ctx context.Context, c *server.Conn, args [][]byte
 
 	// Reject if any target key is already live (of any type).
 	for i := 0; i < len(pairs); i += 2 {
-		live, err := r.keyLive(ctx, encodePK(c.DB(), pairs[i]))
+		live, err := r.keyLive(ctx, r.encodePK(c.DB(), pairs[i]))
 		if err != nil {
 			r.writeStoreError(c, err)
 			return
@@ -526,7 +526,7 @@ func (r *Router) handleMSetNX(ctx context.Context, c *server.Conn, args [][]byte
 	}
 
 	for i := 0; i < len(pairs); i += 2 {
-		pk := encodePK(c.DB(), pairs[i])
+		pk := r.encodePK(c.DB(), pairs[i])
 		if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 			r.writeStoreError(c, err)
 			return
@@ -603,7 +603,7 @@ func (r *Router) incrBy(ctx context.Context, c *server.Conn, key []byte, delta i
 		return
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	if err := r.ensureTypeExpiring(ctx, pk, meta.TypeString); err != nil {
 		r.writeStoreError(c, err)
@@ -630,7 +630,7 @@ func (r *Router) handleIncrByFloat(ctx context.Context, c *server.Conn, args [][
 	w := resp.NewWriter(c.Redcon())
 
 	key := args[1]
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	// Redis' incrbyfloatCommand runs checkType right after the key lookup — BEFORE
 	// parsing the increment — so a live wrong-type key replies WRONGTYPE even when the
@@ -676,7 +676,7 @@ func (r *Router) handleIncrByFloat(ctx context.Context, c *server.Conn, args [][
 func (r *Router) handleStrlen(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 
-	cur, found, wrongType, err := r.readCurrentString(ctx, encodePK(c.DB(), args[1]))
+	cur, found, wrongType, err := r.readCurrentString(ctx, r.encodePK(c.DB(), args[1]))
 	if err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -713,7 +713,7 @@ func (r *Router) handleGetRange(ctx context.Context, c *server.Conn, args [][]by
 		return
 	}
 
-	cur, found, wrongType, rerr := r.readCurrentString(ctx, encodePK(c.DB(), args[1]))
+	cur, found, wrongType, rerr := r.readCurrentString(ctx, r.encodePK(c.DB(), args[1]))
 	if rerr != nil {
 		r.writeStoreError(c, rerr)
 		return

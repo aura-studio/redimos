@@ -135,7 +135,7 @@ func (r *Router) handleSAdd(ctx context.Context, c *server.Conn, args [][]byte) 
 	key := args[1]
 	members := args[2:]
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	if !r.ensureSetWritable(ctx, c, pk, key, members) {
 		return
 	}
@@ -171,7 +171,7 @@ func memberStorable(member []byte) bool { return len(member) <= maxStorableMembe
 
 func (r *Router) handleSRem(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	members := args[2:]
 
 	_, live, wrongType, err := r.setState(ctx, pk)
@@ -216,7 +216,7 @@ func (r *Router) handleSRem(ctx context.Context, c *server.Conn, args [][]byte) 
 // ":0"; a live non-Set key replies WRONGTYPE.
 func (r *Router) handleSIsMember(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	_, live, wrongType, err := r.setState(ctx, pk)
 	if err != nil {
@@ -256,7 +256,7 @@ func (r *Router) handleSIsMember(ctx context.Context, c *server.Conn, args [][]b
 // replies WRONGTYPE.
 func (r *Router) handleSMembers(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	m, live, wrongType, err := r.setState(ctx, pk)
 	if err != nil {
@@ -289,7 +289,7 @@ func (r *Router) handleSMembers(ctx context.Context, c *server.Conn, args [][]by
 // non-Set key replies WRONGTYPE.
 func (r *Router) handleSCard(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	m, live, wrongType, err := r.setState(ctx, pk)
 	if err != nil {
@@ -322,7 +322,7 @@ func (r *Router) handleSCard(ctx context.Context, c *server.Conn, args [][]byte)
 // A live non-Set key replies WRONGTYPE.
 func (r *Router) handleSPop(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	// Parse the optional count and decide the reply shape (scalar vs array).
 	withCount := false
@@ -401,7 +401,7 @@ func (r *Router) handleSPop(ctx context.Context, c *server.Conn, args [][]byte) 
 // A live non-Set key replies WRONGTYPE.
 func (r *Router) handleSRandMember(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	withCount := false
 	count := 1
@@ -476,7 +476,7 @@ func (r *Router) handleSRandMember(ctx context.Context, c *server.Conn, args [][
 // treats an absent key as an empty set.
 func (r *Router) handleSScan(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	// The cursor is a Redis uint64. A value that does not parse is treated as an
 	// invalid cursor (the "restart scan" contract), not a syntax error, matching
@@ -724,7 +724,7 @@ func (r *Router) handleSetAlgebraRead(ctx context.Context, c *server.Conn, op se
 
 	pks := make([]string, len(keys))
 	for i, k := range keys {
-		pks[i] = encodePK(c.DB(), k)
+		pks[i] = r.encodePK(c.DB(), k)
 	}
 
 	result, wrongType, err := r.computeSetAlgebra(ctx, op, pks)
@@ -775,11 +775,11 @@ func (r *Router) handleSetAlgebraStore(ctx context.Context, c *server.Conn, op s
 
 	destKey := args[1]
 	srcKeys := args[2:]
-	destPK := encodePK(c.DB(), destKey)
+	destPK := r.encodePK(c.DB(), destKey)
 
 	srcPKs := make([]string, len(srcKeys))
 	for i, k := range srcKeys {
-		srcPKs[i] = encodePK(c.DB(), k)
+		srcPKs[i] = r.encodePK(c.DB(), k)
 	}
 
 	// Compute the result from the source sets FIRST (non-atomic snapshot). Reading
@@ -854,8 +854,8 @@ func (r *Router) handleSMove(ctx context.Context, c *server.Conn, args [][]byte)
 	w := resp.NewWriter(c.Redcon())
 
 	srcKey, dstKey, member := args[1], args[2], args[3]
-	srcPK := encodePK(c.DB(), srcKey)
-	dstPK := encodePK(c.DB(), dstKey)
+	srcPK := r.encodePK(c.DB(), srcKey)
+	dstPK := r.encodePK(c.DB(), dstKey)
 
 	// Redis 3.2's smoveCommand order is load-tested here and must be preserved exactly:
 	//   1. source ABSENT  -> reply :0 immediately, WITHOUT type-checking the destination;

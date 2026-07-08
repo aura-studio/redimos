@@ -50,7 +50,7 @@ func (r *Router) handleBitField(ctx context.Context, c *server.Conn, args [][]by
 		}
 	}
 
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	var results []bfResult
 	if !hasWrite {

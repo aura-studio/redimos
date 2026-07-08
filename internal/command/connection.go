@@ -234,11 +234,12 @@ func (r *Router) handleAuth(_ context.Context, c *server.Conn, args [][]byte) {
 	w.SimpleString("OK")
 }
 
-// handleSelect implements SELECT. "SELECT 0" always replies "+OK". A non-zero
-// index is rejected with "-ERR invalid DB index" unless multi-DB is enabled, in
-// which case the index is stored on the connection so later commands map to the
-// pk prefix "d{n}:" (requirement 2.7, 2.8, 2.9). A non-integer index yields the
-// standard integer-parse error.
+// handleSelect implements SELECT. In multi-DB mode a non-negative index in
+// [0, databases) is stored on the connection so later commands map to the pk
+// prefix "{n}:"; an out-of-range or non-integer index replies "-ERR invalid DB
+// index". In single-DB mode (the default) every non-negative index is accepted
+// but aliased to db0 — all DBs point to the one shared keyspace. A negative or
+// non-integer index always replies "-ERR invalid DB index".
 func (r *Router) handleSelect(_ context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	idx, err := ParseInt(args[1])
@@ -248,22 +249,23 @@ func (r *Router) handleSelect(_ context.Context, c *server.Conn, args [][]byte) 
 		w.Error(resp.ErrInvalidDBIndex)
 		return
 	}
-	if idx == 0 {
+	if idx < 0 {
+		w.Error(resp.ErrInvalidDBIndex)
+		return
+	}
+	// Single-DB mode: every DB index aliases to the one shared keyspace (db0). Any
+	// non-negative SELECT is accepted and maps the connection to db0, so "all DBs
+	// point to the single table" (redimos single-DB mode).
+	if !r.Config.MultiDB {
 		c.SetDB(0)
 		w.SimpleString("OK")
 		return
 	}
-	// Non-zero index with multi-DB disabled: only DB 0 exists, so reject as an invalid
-	// index (redimos single-DB mode).
-	if !r.Config.MultiDB {
-		w.Error(resp.ErrInvalidDBIndex)
-		return
-	}
-	// Multi-DB: bound the index to [0, databases) like Redis 3.2 (default 16).
-	// Previously any positive index was accepted. Redis 3.2.12 replies the SAME
-	// "invalid DB index" text for a numeric-but-out-of-range index as for a
-	// non-numeric one (verified against the live oracle), so reuse ErrInvalidDBIndex.
-	if idx < 0 || idx >= int64(r.databases()) {
+	// Multi-DB: bound the index to [0, databases) like Redis 3.2 (default 16). Redis
+	// 3.2.12 replies the SAME "invalid DB index" text for a numeric-but-out-of-range
+	// index as for a non-numeric one (verified against the live oracle), so reuse
+	// ErrInvalidDBIndex.
+	if idx >= int64(r.databases()) {
 		w.Error(resp.ErrInvalidDBIndex)
 		return
 	}

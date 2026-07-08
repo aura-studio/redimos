@@ -75,7 +75,7 @@ import (
 func (r *Router) handleLSet(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	key := args[1]
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	value := args[3]
 
 	// Redis checks key existence and type BEFORE parsing the index, so a missing
@@ -142,7 +142,7 @@ func (r *Router) handleLSet(ctx context.Context, c *server.Conn, args [][]byte) 
 // the new length.
 func (r *Router) handleLTrim(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	start, err := ParseInt(args[2])
 	if err != nil {
@@ -200,7 +200,7 @@ func (r *Router) handleLTrim(ctx context.Context, c *server.Conn, args [][]byte)
 // the not-an-integer error. meta.cnt is reconciled to the new length.
 func (r *Router) handleLRem(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	value := args[3]
 
 	count, err := ParseInt(args[2])
@@ -320,7 +320,7 @@ func lremCompute(all [][]byte, count int64, value []byte) (newList [][]byte, rem
 func (r *Router) handleLInsert(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	key := args[1]
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	pivot := args[3]
 	value := args[4]
 
@@ -413,8 +413,8 @@ func (r *Router) handleLInsert(ctx context.Context, c *server.Conn, args [][]byt
 // to task 20.1.
 func (r *Router) handleRPopLPush(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	srcPK := encodePK(c.DB(), args[1])
-	dstPK := encodePK(c.DB(), args[2])
+	srcPK := r.encodePK(c.DB(), args[1])
+	dstPK := r.encodePK(c.DB(), args[2])
 
 	_, live, wrongType, err := r.listState(ctx, srcPK)
 	if err != nil {

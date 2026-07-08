@@ -38,11 +38,23 @@ type appConfig struct {
 	commandTimeout time.Duration // per-command deadline bounding its backend calls (0 disables)
 
 	// DynamoDB / storage.
-	table          string // DynamoDB table name
-	consistency    string // read consistency: strong|eventual
-	region         string // AWS region override (empty uses the default chain)
-	dynamoEndpoint string // DynamoDB endpoint override (e.g. local dynamodb)
-	retryMax       int    // AWS SDK max attempts (throttle retry/backoff, req 18.8)
+	table       string // DynamoDB table name
+	consistency string // read consistency: strong|eventual
+	region      string // AWS region; also the signing region for -endpoint-url. Empty uses the default chain.
+	// DynamoDB connection (rocket-nano style; all optional). Three modes:
+	//   ① local dynamodb-local: set -endpoint-url (dummy credentials are auto-injected
+	//      when no credential flag is given, so it "just works");
+	//   ② local -> cloud: set -access-key-id / -secret-access-key / -session-token;
+	//   ③ cloud: set nothing — the AWS SDK default credential/region chain is used
+	//      (env AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN, shared profile, IAM role).
+	// An endpoint field set installs an endpoint resolver for the DynamoDB service
+	// (signed with -region); a credential field set installs a static credentials provider.
+	endpointURL         string // -endpoint-url
+	endpointPartitionID string // -endpoint-partition-id
+	credAccessKeyID     string // -access-key-id
+	credSecretAccessKey string // -secret-access-key
+	credSessionToken    string // -session-token
+	retryMax            int    // AWS SDK max attempts (throttle retry/backoff, req 18.8)
 	deleteBatch    int    // lazy-delete BatchWriteItem size
 	deleteRate     float64
 
@@ -79,7 +91,11 @@ func parseFlags() appConfig {
 	flag.StringVar(&c.table, "table", "redis-data", "DynamoDB single-table name")
 	flag.StringVar(&c.consistency, "consistency", "strong", "default read consistency: strong|eventual")
 	flag.StringVar(&c.region, "region", "", "AWS region override (empty uses the default credential/region chain)")
-	flag.StringVar(&c.dynamoEndpoint, "dynamo-endpoint", "", "DynamoDB endpoint override (e.g. http://localhost:8000 for dynamodb-local)")
+	flag.StringVar(&c.endpointURL, "endpoint-url", "", "DynamoDB endpoint URL override (e.g. http://localhost:8000 for dynamodb-local); installs an endpoint resolver signed with -region")
+	flag.StringVar(&c.endpointPartitionID, "endpoint-partition-id", "", "DynamoDB endpoint partition id for the endpoint resolver")
+	flag.StringVar(&c.credAccessKeyID, "access-key-id", "", "static AWS access key id (empty uses the default credential chain)")
+	flag.StringVar(&c.credSecretAccessKey, "secret-access-key", "", "static AWS secret access key")
+	flag.StringVar(&c.credSessionToken, "session-token", "", "static AWS session token (for temporary credentials)")
 	flag.IntVar(&c.retryMax, "retry-max-attempts", 5, "AWS SDK max attempts for throttling retry/backoff")
 	flag.IntVar(&c.deleteBatch, "delete-batch-size", 25, "lazy-delete BatchWriteItem size (1-25)")
 	flag.Float64Var(&c.deleteRate, "delete-rate", 50, "lazy-delete pks processed per second (<=0 disables rate limiting)")
@@ -93,7 +109,7 @@ func parseFlags() appConfig {
 
 	flag.DurationVar(&c.sweepInterval, "sweep-interval", meta.DefaultSweepInterval, "orphan sweeper interval")
 
-	flag.StringVar(&c.metricsAddr, "metrics-addr", ":9121", "HTTP listen address for /metrics and /healthz")
+	flag.StringVar(&c.metricsAddr, "metrics-addr", ":9121", "HTTP listen address for /metrics and /healthz; :0 (or an in-use address) auto-selects a free port, logged at startup")
 	flag.DurationVar(&c.slowlogThreshold, "slowlog-threshold", 10*time.Millisecond, "minimum command duration recorded in the slowlog ring")
 	flag.IntVar(&c.slowlogCapacity, "slowlog-capacity", metrics.DefaultSlowlogCapacity, "slowlog ring buffer capacity")
 	flag.StringVar(&c.requestLog, "request-log", "none", "PII-safe structured (JSON) request logging level: none|error|slow|all")

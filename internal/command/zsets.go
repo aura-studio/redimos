@@ -394,7 +394,7 @@ func equalFold(b []byte, s string) bool {
 // as ZRANGE treats an absent key as an empty sorted set.
 func (r *Router) handleZScan(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	// The cursor is a Redis uint64. A value that does not parse is treated as an
 	// invalid cursor (the "restart scan" contract), not a syntax error, matching

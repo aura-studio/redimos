@@ -421,7 +421,7 @@ func (s *syncStore) HScan(ctx context.Context, pk string, lek map[string]types.A
 func startConcurrentServer(t *testing.T, store storage.Store) string {
 	t.Helper()
 
-	r := NewRouterWithStorage(Config{}, Storage{Store: store, Now: fixedNow(1000)})
+	r := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: store, Now: fixedNow(1000)})
 	s := server.New(server.Options{Addr: "127.0.0.1:0"}, r)
 	signal := make(chan error, 1)
 	go func() { _ = s.ListenServeAndSignal(signal) }()

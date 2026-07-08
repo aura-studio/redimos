@@ -209,7 +209,7 @@ func TestHScanEvictedCursorIsInvalid(t *testing.T) {
 	t.Skip("v1 line: HSCAN is gated on redimo v1.6.1 (no cursor scan primitive)")
 	store := newFakeStringStore()
 	reg := scan.New(scan.Config{InstID: scanInstID, Capacity: 1})
-	router := NewRouterWithStorage(Config{}, Storage{Store: store, Now: fixedNow(1000), Scan: reg})
+	router := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: store, Now: fixedNow(1000), Scan: reg})
 	s := server.New(server.Options{Addr: "127.0.0.1:0", InstID: scanInstID}, router)
 
 	signal := make(chan error, 1)

@@ -30,7 +30,7 @@ func startScanServer(t *testing.T, store storage.Store, now func() int64) (net.C
 	t.Helper()
 
 	reg := scan.New(scan.Config{InstID: scanInstID})
-	r := NewRouterWithStorage(Config{}, Storage{Store: store, Now: now, Scan: reg})
+	r := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: store, Now: now, Scan: reg})
 	s := server.New(server.Options{Addr: "127.0.0.1:0", InstID: scanInstID}, r)
 
 	signal := make(chan error, 1)
@@ -252,7 +252,7 @@ func TestScanEvictedCursorIsInvalid(t *testing.T) {
 	store := newFakeStringStore()
 	// Capacity 1: saving a second cursor evicts the first (LRU).
 	reg := scan.New(scan.Config{InstID: scanInstID, Capacity: 1})
-	router := NewRouterWithStorage(Config{}, Storage{Store: store, Now: fixedNow(1000), Scan: reg})
+	router := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: store, Now: fixedNow(1000), Scan: reg})
 	s := server.New(server.Options{Addr: "127.0.0.1:0", InstID: scanInstID}, router)
 
 	signal := make(chan error, 1)

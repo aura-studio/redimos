@@ -85,7 +85,7 @@ func TestFaultInjection_ThrottlePropagatesRetryableError(t *testing.T) {
 func startScanServerReg(t *testing.T, store storage.Store, reg *scan.Registry, instID string, now func() int64) (net.Conn, *bufio.Reader) {
 	t.Helper()
 
-	router := NewRouterWithStorage(Config{}, Storage{Store: store, Now: now, Scan: reg})
+	router := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: store, Now: now, Scan: reg})
 	s := server.New(server.Options{Addr: "127.0.0.1:0", InstID: instID}, router)
 
 	signal := make(chan error, 1)

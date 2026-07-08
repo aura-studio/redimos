@@ -82,7 +82,7 @@ func (r *Router) handleZAdd(ctx context.Context, c *server.Conn, args [][]byte) 
 	}
 	pairs := rest[firstPair:]
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	switch {
 	case flags.incr:

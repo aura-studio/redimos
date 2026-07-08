@@ -174,7 +174,7 @@ func (r *Router) handleGeoAdd(ctx context.Context, c *server.Conn, args [][]byte
 		memberBytes = append(memberBytes, rest[i+2])
 	}
 
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 	if err := guard.CheckWrite(key, memberBytes, nil); err != nil {
 		r.writeStoreError(c, err)
 		return
@@ -230,7 +230,7 @@ func (r *Router) handleGeoDist(ctx context.Context, c *server.Conn, args [][]byt
 		unit = u
 	}
 
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	// Redis' geodistCommand distinguishes the two absent cases: a missing KEY replies
 	// shared.emptybulk ($0) via lookupKeyReadOrReply(...emptybulk), while a missing MEMBER
 	// of a present key replies shared.nullbulk ($-1) below. GEOPOS/GEOHASH make the same
@@ -264,7 +264,7 @@ func (r *Router) handleGeoDist(ctx context.Context, c *server.Conn, args [][]byt
 
 // handleGeoPos implements GEOPOS key member [...].
 func (r *Router) handleGeoPos(ctx context.Context, c *server.Conn, args [][]byte) {
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	live, done := r.geoWrongType(ctx, c, pk)
 	if done {
 		return
@@ -297,7 +297,7 @@ func (r *Router) handleGeoPos(ctx context.Context, c *server.Conn, args [][]byte
 
 // handleGeoHash implements GEOHASH key member [...].
 func (r *Router) handleGeoHash(ctx context.Context, c *server.Conn, args [][]byte) {
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	live, done := r.geoWrongType(ctx, c, pk)
 	if done {
 		return
@@ -407,7 +407,7 @@ func (o geoRadiusOptions) checkGeoStore(readOnly bool) string {
 
 func (r *Router) handleGeoRadius(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	// Redis georadiusGeneric looks the key up FIRST: a missing key replies an empty
 	// array (*0) and a live wrong-type key replies WRONGTYPE — both BEFORE any
 	// coordinate/radius/option is parsed. Parsing errors are only reachable on a
@@ -451,7 +451,7 @@ func isReadOnlyGeo(name []byte) bool {
 
 func (r *Router) handleGeoRadiusByMember(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 	// As GEORADIUS: lookup + type check first (missing -> *0, wrong type ->
 	// WRONGTYPE), then the member is decoded, then radius/unit, then options.
 	live, done := r.geoWrongType(ctx, c, pk)
@@ -580,7 +580,7 @@ func (r *Router) geoRadiusReply(ctx context.Context, c *server.Conn, pk string, 
 // an empty result set leaves dest deleted and replies 0.
 func (r *Router) geoStore(ctx context.Context, c *server.Conn, storeKey []byte, storeDist bool, results []geoResult) {
 	w := resp.NewWriter(c.Redcon())
-	destPK := encodePK(c.DB(), storeKey)
+	destPK := r.encodePK(c.DB(), storeKey)
 
 	members := make([]storage.ZMember, len(results))
 	memberBytes := make([][]byte, len(results))

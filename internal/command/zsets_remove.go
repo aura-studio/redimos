@@ -15,7 +15,7 @@ import (
 // replies WRONGTYPE.
 func (r *Router) handleZRem(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	_, live, wrongType, err := r.zsetState(ctx, pk)
 	if err != nil {
@@ -59,7 +59,7 @@ func (r *Router) handleZRem(ctx context.Context, c *server.Conn, args [][]byte) 
 // absent/expired key replies ":0"; a live non-ZSet key replies WRONGTYPE.
 func (r *Router) handleZRemRangeByRank(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	start, err := ParseInt(args[2])
 	if err != nil {
@@ -106,7 +106,7 @@ func (r *Router) handleZRemRangeByRank(ctx context.Context, c *server.Conn, args
 // bound replies the min-or-max error.
 func (r *Router) handleZRemRangeByScore(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	min, ok := parseScoreBound(args[2])
 	if !ok {

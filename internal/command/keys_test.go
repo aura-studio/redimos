@@ -28,7 +28,7 @@ var _ meta.DeletionEnqueuer = (*spyEnqueuer)(nil)
 // member cleanup can be observed.
 func startKeysServer(t *testing.T, store storage.Store, now func() int64, enq meta.DeletionEnqueuer) (net.Conn, *bufio.Reader) {
 	t.Helper()
-	r := NewRouterWithStorage(Config{}, Storage{Store: store, Now: now, Enqueuer: enq})
+	r := NewRouterWithStorage(Config{MultiDB: true}, Storage{Store: store, Now: now, Enqueuer: enq})
 	s := server.New(server.Options{Addr: "127.0.0.1:0"}, r)
 	signal := make(chan error, 1)
 	go func() { _ = s.ListenServeAndSignal(signal) }()

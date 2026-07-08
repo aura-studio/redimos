@@ -67,7 +67,7 @@ func (r *Router) registerHLL() {
 func (r *Router) handlePFDebug(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
 	sub := toLower(string(args[1]))
-	pk := encodePK(c.DB(), args[2])
+	pk := r.encodePK(c.DB(), args[2])
 
 	cur, found, wrongType, err := r.readCurrentString(ctx, pk)
 	if err != nil {
@@ -142,7 +142,7 @@ func (r *Router) handlePFAdd(ctx context.Context, c *server.Conn, args [][]byte)
 	w := resp.NewWriter(c.Redcon())
 	key := args[1]
 	elements := args[2:]
-	pk := encodePK(c.DB(), key)
+	pk := r.encodePK(c.DB(), key)
 
 	var changed bool
 	_, err := r.rmwString(ctx, pk, func(base []byte) ([]byte, error) {
@@ -191,7 +191,7 @@ func (r *Router) handlePFCount(ctx context.Context, c *server.Conn, args [][]byt
 	merged := make([]byte, hllRegBytes)
 	any := false
 	for _, key := range args[1:] {
-		cur, found, wrongType, err := r.readCurrentString(ctx, encodePK(c.DB(), key))
+		cur, found, wrongType, err := r.readCurrentString(ctx, r.encodePK(c.DB(), key))
 		if err != nil {
 			r.writeStoreError(c, err)
 			return
@@ -228,7 +228,7 @@ func (r *Router) handlePFMerge(ctx context.Context, c *server.Conn, args [][]byt
 	// across these reads, matching redimos' other multi-key writes).
 	srcRegs := make([][]byte, 0, len(args)-2)
 	for _, key := range args[2:] {
-		cur, found, wrongType, err := r.readCurrentString(ctx, encodePK(c.DB(), key))
+		cur, found, wrongType, err := r.readCurrentString(ctx, r.encodePK(c.DB(), key))
 		if err != nil {
 			r.writeStoreError(c, err)
 			return
@@ -247,7 +247,7 @@ func (r *Router) handlePFMerge(ctx context.Context, c *server.Conn, args [][]byt
 		srcRegs = append(srcRegs, cur[hllHdrSize:])
 	}
 
-	pk := encodePK(c.DB(), destKey)
+	pk := r.encodePK(c.DB(), destKey)
 	_, err := r.rmwString(ctx, pk, func(base []byte) ([]byte, error) {
 		var blob []byte
 		if len(base) == 0 {

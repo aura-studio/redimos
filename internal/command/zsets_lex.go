@@ -116,7 +116,7 @@ func (r *Router) handleZRevRangeByLex(ctx context.Context, c *server.Conn, args 
 // replies WRONGTYPE; a malformed bound replies the not-valid-string-range error.
 func (r *Router) zRangeByLex(ctx context.Context, c *server.Conn, args [][]byte, rev bool) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	first, ok := parseLexBound(args[2])
 	if !ok {
@@ -226,7 +226,7 @@ func applyZLimit(members []storage.ZMember, offset, count int) []storage.ZMember
 // live non-ZSet key replies WRONGTYPE.
 func (r *Router) handleZLexCount(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	min, ok := parseLexBound(args[2])
 	if !ok {
@@ -274,7 +274,7 @@ func (r *Router) handleZLexCount(ctx context.Context, c *server.Conn, args [][]b
 // WRONGTYPE. A removal that empties the set deletes the key (via adjustCount).
 func (r *Router) handleZRemRangeByLex(ctx context.Context, c *server.Conn, args [][]byte) {
 	w := resp.NewWriter(c.Redcon())
-	pk := encodePK(c.DB(), args[1])
+	pk := r.encodePK(c.DB(), args[1])
 
 	min, ok := parseLexBound(args[2])
 	if !ok {
