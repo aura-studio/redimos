@@ -81,6 +81,50 @@ func TestDeleter_SkipsRecreatedKey(t *testing.T) {
 	}
 }
 
+// TestDeleter_SynchronousReclaimsInline verifies the additive Synchronous mode: with
+// Synchronous set, Enqueue reclaims the pk's members INLINE (before it returns) with no
+// background worker, Start is a no-op, and the IsLive recreate-guard still applies.
+func TestDeleter_SynchronousReclaimsInline(t *testing.T) {
+	md := &fakeMemberDeleter{perPK: 3}
+	var live atomic.Bool
+
+	d := NewDeleter(md, DeleterConfig{
+		Synchronous: true,
+		IsLive:      func(context.Context, string) (bool, error) { return live.Load(), nil },
+	})
+
+	// Start must be a no-op in synchronous mode: no goroutine is spawned, so started
+	// stays false and Stop returns immediately.
+	d.Start(context.Background())
+
+	// A live (recreated) key is skipped inline — DeleteMembers must not fire.
+	live.Store(true)
+	d.Enqueue("liveKey")
+	if got := md.recorded(); len(got) != 0 {
+		t.Fatalf("live key reclaimed inline: %v; recreate guard failed in sync mode", got)
+	}
+
+	// A genuine orphan is reclaimed INLINE: recorded immediately after Enqueue returns,
+	// with no waiting on a background worker.
+	live.Store(false)
+	d.Enqueue("orphan")
+	if got := md.recorded(); len(got) != 1 || got[0] != "orphan" {
+		t.Fatalf("synchronous Enqueue recorded %v; want [orphan] inline", got)
+	}
+	if d.Deleted() != 3 {
+		t.Fatalf("Deleted()=%d; want 3 (metrics recorded inline)", d.Deleted())
+	}
+
+	// Stop is a no-op (Start never started a worker) and must not block.
+	done := make(chan struct{})
+	go func() { d.Stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Stop blocked in synchronous mode; want immediate return")
+	}
+}
+
 // waitFor reads one value from ch or fails the test after a deadline. It keeps the
 // concurrency tests fast on success and bounded on failure.
 func waitFor(t *testing.T, ch <-chan string) string {
