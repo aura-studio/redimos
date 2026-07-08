@@ -31,6 +31,7 @@ type appConfig struct {
 	addr                string // listen address for the RESP2 endpoint
 	requirepass         string // single-password AUTH; empty disables auth
 	multiDB             bool   // permit SELECT n (n != 0)
+	autoCreateTable     bool   // create the DynamoDB table if missing, and verify an existing table's schema
 	databases           int    // logical DB count bounding SELECT when multi-DB is on
 	maxCollectionResult int    // cap on whole-collection reply/operand size (0 disables)
 	maxCommandBytes     int    // reject a single command larger than this (0 disables)
@@ -83,6 +84,7 @@ func parseFlags() appConfig {
 	flag.StringVar(&c.addr, "addr", ":6379", "listen address for the RESP2 endpoint")
 	flag.StringVar(&c.requirepass, "requirepass", "", "single-password AUTH (empty disables auth)")
 	flag.BoolVar(&c.multiDB, "multi-db", false, "permit SELECT of non-zero DB indexes")
+	flag.BoolVar(&c.autoCreateTable, "auto-create-table", false, "create the DynamoDB table with redimo's schema if it does not exist, then verify the table's schema is redimo-compatible (needs dynamodb:DescribeTable + CreateTable)")
 	flag.IntVar(&c.databases, "databases", 16, "logical DB count bounding SELECT when -multi-db is set (Redis default 16)")
 	flag.IntVar(&c.maxCollectionResult, "max-collection-result", 0, "reject a whole-collection reply/operand (HGETALL/SMEMBERS/...) with more than N members (0 disables)")
 	flag.IntVar(&c.maxCommandBytes, "max-command-bytes", 0, "reject a single command whose raw wire size exceeds N bytes (0 disables)")

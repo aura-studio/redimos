@@ -50,7 +50,7 @@ redimos [flags]
 - **默认**:`redis-data`
 - **作用**:DynamoDB 单表名(所有 key 都存这一张表)。
 - **示例**:`-table redis-data`
-- **备注**:表必须**预先存在**且 schema 正确(见文末「表 schema」),启动时会做一次 `GetItem` 探活,不存在直接失败。
+- **备注**:默认表必须**预先存在**且 schema 正确(见文末「表 schema」),启动时会做一次 `GetItem` 探活,不存在直接失败;若开 [`-auto-create-table`](#-auto-create-table) 则表不存在时自动建表、已存在则校验 schema 兼容性。
 
 ### `-region`
 - **默认**:空(走默认链的 region:env `AWS_REGION` / profile)
@@ -75,6 +75,12 @@ redimos [flags]
 - **作用**:**静态 AWS 凭据**。任一非空就安装一个静态 `CredentialsProvider`(AK / SK / 临时凭据的 Token)。
 - **示例**:`-access-key-id AKIA... -secret-access-key xxxx -session-token yyyy`
 - **备注**:`-session-token` 用于 STS 临时凭据(可留空用长期凭据)。静态凭据的 `Source` 固定标为 `redimos`。**不设**这三个 → 凭据走 SDK 默认链(env / profile / IAM role)。
+
+### `-auto-create-table`
+- **默认**:关(false)
+- **作用**:开启后启动时若**数据表不存在**就用 redimo 的 schema **自动建表**(按量计费 PayPerRequest;pk/sk 为 HASH+RANGE,skN 建名为 `idx` 的 LSI);若表**已存在**则**校验其 schema 兼容性**(key 属性类型、主键 schema、`idx` LSI),不兼容直接 fatal 退出。
+- **示例**:`-auto-create-table`
+- **备注**:关(默认)时对表**零操作**(不调 DescribeTable/CreateTable),保持「运维自行建表」的老行为。开启需额外 IAM 权限 `dynamodb:DescribeTable` +(建表用)`dynamodb:CreateTable`。**兼容性检查会拦住把 v1(String 键)表与 v2(Binary 键)表用错线的经典坑**——例如 v1 代理指向 v2 的 B 键表会 fatal 并提示「这看起来是 v2(Binary 键)表,请用 v2 代理」,反之亦然。
 
 ---
 
