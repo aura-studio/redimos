@@ -42,13 +42,16 @@ func TestCheckTableCompatible(t *testing.T) {
 	}
 
 	// A v2 (Binary-key) table handed to the v1 String line is rejected WITH the hint —
-	// this is the footgun the check exists to catch.
-	err := checkTableCompatible("v2tbl", tableDesc(types.ScalarAttributeTypeB, true, "pk", "skN"))
+	// this is the footgun the check exists to catch. The fixture is named "binarytbl"
+	// (not "v2tbl") so the hint assertion below cannot be satisfied tautologically by
+	// the table name leaking into the %q-formatted error.
+	err := checkTableCompatible("binarytbl", tableDesc(types.ScalarAttributeTypeB, true, "pk", "skN"))
 	if err == nil {
 		t.Fatal("Binary-key table should be rejected on the String line")
 	}
-	if !strings.Contains(err.Error(), "v2") {
-		t.Errorf("Binary-key rejection should hint at v2, got: %v", err)
+	// Assert on the distinctive hint text, so a broken/missing keyTypeHint is caught.
+	if !strings.Contains(err.Error(), "use the v2 proxy") {
+		t.Errorf("Binary-key rejection should hint 'use the v2 proxy', got: %v", err)
 	}
 
 	// A table missing the idx LSI is rejected.
