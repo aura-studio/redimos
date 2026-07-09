@@ -73,3 +73,47 @@ func Example_inProcessClient() {
 		log.Fatal(err)
 	}
 }
+
+// Example_inProcessClient_autoCreateTable shows the embedding provisioning its own
+// DynamoDB table. With Options.AutoCreateTable set, NewInProcessClient creates the
+// table with redimo's schema if it does not exist — and otherwise verifies the existing
+// table is redimo-compatible — before returning, so a fresh environment needs no
+// out-of-band table setup. It mirrors the cmd/redimos -auto-create-table flag and needs
+// the dynamodb:DescribeTable and dynamodb:CreateTable permissions.
+//
+// Like the example above it has no "// Output:" line, so it is compiled and
+// type-checked but not executed (no live DynamoDB needed to keep the suite green).
+func Example_inProcessClient_autoCreateTable() {
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+			return aws.Credentials{AccessKeyID: "dummy", SecretAccessKey: "dummy", Source: "example"}, nil
+		})),
+		config.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(
+			func(service, region string, _ ...interface{}) (aws.Endpoint, error) {
+				return aws.Endpoint{URL: "http://localhost:8000", PartitionID: "aws", SigningRegion: "us-east-1"}, nil
+			})),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ddb := dynamodb.NewFromConfig(cfg)
+
+	// AutoCreateTable: create the table (with redimo's schema) if it is missing, or
+	// verify an existing one is compatible, before the client is returned.
+	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{
+		Table:           "redis-data",
+		AutoCreateTable: true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer closer.Close()
+
+	ctx := context.Background()
+	if err := client.Set(ctx, "greeting", "hello", 0).Err(); err != nil {
+		log.Fatal(err)
+	}
+	val, _ := client.Get(ctx, "greeting").Result()
+	fmt.Println(val)
+}

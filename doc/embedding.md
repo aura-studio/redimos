@@ -81,11 +81,13 @@ strongly-consistent proxy over the redimo default table.
 | `Databases` | Logical DB count `SELECT` accepts when `MultiDB` is set: valid index `[0, Databases)`. | `16` |
 | `MaxCollectionResult` | Cap members a whole-collection reply (HGETALL/SMEMBERS/LRANGE/…) may materialize; `0` disables. | `0` |
 | `MaxCommandBytes` | Reject a single command whose raw wire size exceeds N bytes; `0` disables. | `0` |
+| `AutoCreateTable` | Create the table with redimo's schema if missing, else verify an existing table is redimo-compatible, before returning (mirrors the CLI `-auto-create-table`; needs `dynamodb:DescribeTable`+`CreateTable`). | `false` |
 
 ## Example
 
-A complete, copy-pasteable example lives in `example_test.go`
-(`Example_inProcessClient`). In short:
+Complete, copy-pasteable examples live in `example_test.go`:
+`Example_inProcessClient`, and `Example_inProcessClient_autoCreateTable` (which sets
+`AutoCreateTable: true` so the embedding provisions its own table on first use). In short:
 
 ```go
 client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{

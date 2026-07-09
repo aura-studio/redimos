@@ -69,6 +69,15 @@ type Options struct {
 	// MaxCommandBytes rejects a single command whose raw wire size exceeds it. 0 (the
 	// default) disables the check.
 	MaxCommandBytes int
+
+	// AutoCreateTable, when true, makes NewInProcessClient create the DynamoDB table
+	// with redimo's schema if it does not exist — and otherwise verify the existing
+	// table's schema is redimo-compatible — before the client is returned. It mirrors
+	// the cmd/redimos -auto-create-table flag and needs dynamodb:DescribeTable and (to
+	// create) dynamodb:CreateTable. Leave false (the default) to require an
+	// operator-provisioned table, in which case no table-level API is called. Set Table
+	// when enabling it.
+	AutoCreateTable bool
 }
 
 // NewInProcessClient builds an in-process redimos proxy over ddb and returns a
@@ -89,6 +98,16 @@ type Options struct {
 // client should no longer be used (and the caller typically also closes the redis
 // client, though closing the server already severs its conns).
 func NewInProcessClient(ddb *dynamodb.Client, opts Options) (*redis.Client, io.Closer, error) {
+	// Optional: create the table with redimo's schema if missing, or verify an existing
+	// table's schema is compatible, BEFORE anything else — mirroring the CLI
+	// -auto-create-table flag. Off by default, so a bare embedding touches no
+	// table-level APIs (DescribeTable/CreateTable).
+	if opts.AutoCreateTable {
+		if err := storage.EnsureTable(context.Background(), ddb, opts.Table); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	// --- storage: redimo-backed Store over the caller's DynamoDB client ---------
 	store := storage.New(ddb, storage.Options{
 		TableName:            opts.Table,
