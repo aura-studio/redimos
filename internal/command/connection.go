@@ -34,11 +34,11 @@ type Config struct {
 	// pk prefix "d{n}:". Requirement 2.8, 2.9.
 	MultiDB bool
 
-	// Databases is the number of logical DBs SELECT accepts when MultiDB is enabled:
-	// a valid index is [0, Databases). A value <= 0 defaults to Redis 3.2's 16.
+	// DB is the number of logical DBs SELECT accepts when MultiDB is enabled:
+	// a valid index is [0, DB). A value <= 0 defaults to Redis 3.2's 16.
 	// Matching this bound is what makes SELECT reject an out-of-range index the same
 	// way Redis does.
-	Databases int
+	DB int
 
 	// MaxCollectionResult caps the number of members a whole-collection reply
 	// (HGETALL/HKEYS/HVALS/SMEMBERS/LRANGE/ZRANGE...) or *STORE operand may
@@ -275,8 +275,8 @@ func (r *Router) handleSelect(_ context.Context, c *server.Conn, args [][]byte) 
 // databases returns the configured logical DB count, defaulting to Redis' 16 when
 // unset so a bare Config still bounds SELECT the same way Redis does.
 func (r *Router) databases() int {
-	if r.Config.Databases > 0 {
-		return r.Config.Databases
+	if r.Config.DB > 0 {
+		return r.Config.DB
 	}
 	return 16
 }

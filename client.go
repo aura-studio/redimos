@@ -57,9 +57,9 @@ type Options struct {
 	// TCP proxy rejects it.
 	MultiDB bool
 
-	// Databases bounds the logical DB count SELECT accepts when MultiDB is true: a
-	// valid index is [0, Databases). A value <= 0 defaults to Redis 3.2's 16.
-	Databases int
+	// DB bounds the logical DB count SELECT accepts when MultiDB is true: a
+	// valid index is [0, DB). A value <= 0 defaults to Redis 3.2's 16.
+	DB int
 
 	// MaxCollectionResult caps how many members a whole-collection reply
 	// (HGETALL/SMEMBERS/LRANGE/...) may materialize before the command is rejected.
@@ -70,14 +70,14 @@ type Options struct {
 	// default) disables the check.
 	MaxCommandBytes int
 
-	// AutoCreateTable, when true, makes NewInProcessClient create the DynamoDB table
+	// AutoCreate, when true, makes NewInProcessClient create the DynamoDB table
 	// with redimo's schema if it does not exist — and otherwise verify the existing
 	// table's schema is redimo-compatible — before the client is returned. It mirrors
 	// the cmd/redimos -auto-create-table flag and needs dynamodb:DescribeTable and (to
 	// create) dynamodb:CreateTable. Leave false (the default) to require an
 	// operator-provisioned table, in which case no table-level API is called. Set Table
 	// when enabling it.
-	AutoCreateTable bool
+	AutoCreate bool
 }
 
 // NewInProcessClient builds an in-process redimos proxy over ddb and returns a
@@ -102,7 +102,7 @@ func NewInProcessClient(ddb *dynamodb.Client, opts Options) (*redis.Client, io.C
 	// table's schema is compatible, BEFORE anything else — mirroring the CLI
 	// -auto-create-table flag. Off by default, so a bare embedding touches no
 	// table-level APIs (DescribeTable/CreateTable).
-	if opts.AutoCreateTable {
+	if opts.AutoCreate {
 		if err := storage.EnsureTable(context.Background(), ddb, opts.Table); err != nil {
 			return nil, nil, err
 		}
@@ -142,7 +142,7 @@ func NewInProcessClient(ddb *dynamodb.Client, opts Options) (*redis.Client, io.C
 	router := command.NewRouterWithStorage(
 		command.Config{
 			MultiDB:             opts.MultiDB,
-			Databases:           opts.Databases,
+			DB:                  opts.DB,
 			MaxCollectionResult: opts.MaxCollectionResult,
 		},
 		command.Storage{
@@ -174,8 +174,8 @@ func NewInProcessClient(ddb *dynamodb.Client, opts Options) (*redis.Client, io.C
 	c := &inProcessCloser{}
 
 	client := redis.NewClient(&redis.Options{
-		Network:  "inproc",
-		Addr:     "redimos",
+		Network:         "inproc",
+		Addr:            "redimos",
 		Protocol:        2,    // RESP2: redimos speaks RESP2 only.
 		DisableIdentity: true, // skip the CLIENT SETINFO / HELLO handshake redimos declines.
 		Dialer: func(_ context.Context, _, _ string) (net.Conn, error) {
