@@ -39,7 +39,7 @@ func Example_inProcessClient() {
 
 	// Build the in-process client. The returned *redis.Client is an ordinary go-redis
 	// client, but it talks to redimos in-process over an in-memory conn.
-	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{
+	client, closer, err := redimos.NewClient(ddb, redimos.Options{
 		Table:   "redis-data",
 		MultiDB: true,
 	})
@@ -75,7 +75,7 @@ func Example_inProcessClient() {
 }
 
 // Example_inProcessClient_autoCreateTable shows the embedding provisioning its own
-// DynamoDB table. With Options.AutoCreate set, NewInProcessClient creates the
+// DynamoDB table. With Options.AutoCreate set, NewClient creates the
 // table with redimo's schema if it does not exist — and otherwise verifies the existing
 // table is redimo-compatible — before returning, so a fresh environment needs no
 // out-of-band table setup. It mirrors the cmd/redimos -auto-create-table flag and needs
@@ -101,7 +101,7 @@ func Example_inProcessClient_autoCreateTable() {
 
 	// AutoCreate: create the table (with redimo's schema) if it is missing, or
 	// verify an existing one is compatible, before the client is returned.
-	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{
+	client, closer, err := redimos.NewClient(ddb, redimos.Options{
 		Table:           "redis-data",
 		AutoCreate: true,
 	})

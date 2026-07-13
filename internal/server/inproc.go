@@ -9,7 +9,7 @@ import (
 
 // ServeConn serves exactly one already-established net.Conn using the SAME redcon
 // callbacks (onAccept / onCommand / onClosed) as the TCP path, so an embedded,
-// in-process client (see the root redimos.NewInProcessClient) drives the proxy over
+// in-process client (see the root redimos.NewClient) drives the proxy over
 // an in-memory connection with byte-for-byte the same command handling, per-command
 // serial pipelining, MaxCommandBytes gate and drain/closing semantics as a real TCP
 // client. It is purely additive: the TCP serving path (New + ListenAndServe /

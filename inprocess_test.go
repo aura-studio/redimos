@@ -62,9 +62,9 @@ func TestInProcessClient_Commands(t *testing.T) {
 	endpoint, table := ddbEndpoint(t)
 	ddb := newDDB(t, endpoint)
 
-	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{Table: table})
+	client, closer, err := redimos.NewClient(ddb, redimos.Options{Table: table})
 	if err != nil {
-		t.Fatalf("NewInProcessClient: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	defer closer.Close()
 
@@ -134,9 +134,9 @@ func TestInProcessClient_SynchronousDelete(t *testing.T) {
 	endpoint, table := ddbEndpoint(t)
 	ddb := newDDB(t, endpoint)
 
-	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{Table: table})
+	client, closer, err := redimos.NewClient(ddb, redimos.Options{Table: table})
 	if err != nil {
-		t.Fatalf("NewInProcessClient: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	defer closer.Close()
 
@@ -183,9 +183,9 @@ func TestInProcessClient_NoGoroutineLeak(t *testing.T) {
 	runtime.GC()
 	base := runtime.NumGoroutine()
 
-	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{Table: table})
+	client, closer, err := redimos.NewClient(ddb, redimos.Options{Table: table})
 	if err != nil {
-		t.Fatalf("NewInProcessClient: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 
 	ctx := context.Background()
@@ -233,9 +233,9 @@ func TestInProcessClient_Pipelining(t *testing.T) {
 	endpoint, table := ddbEndpoint(t)
 	ddb := newDDB(t, endpoint)
 
-	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{Table: table})
+	client, closer, err := redimos.NewClient(ddb, redimos.Options{Table: table})
 	if err != nil {
-		t.Fatalf("NewInProcessClient: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	defer closer.Close()
 
