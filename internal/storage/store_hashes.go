@@ -10,10 +10,12 @@ import (
 
 // --- Hash data operations (task 13.1) --------------------------------------
 //
-// Field values are stored and read back as opaque binary (BytesValue / .Bytes()),
-// exactly like the String family, so HGET round-trips arbitrary bytes and the
-// HINCRBY/HINCRBYFLOAT read-modify-write can reconcile the numeric decimal form
-// with the same byte encoding HGET reads. Whole-partition reads
+// Field values are WRITTEN as opaque binary (BytesValue), exactly like the String
+// family, so HGET round-trips arbitrary bytes and the HINCRBY/HINCRBYFLOAT
+// read-modify-write can reconcile the numeric decimal form with the same byte
+// encoding HGET reads. Reads go through rvBytes (not raw .Bytes()) so a "val"
+// attribute a foreign producer wrote as String/Number — as the redimo_aurora_nano
+// table does — decodes to its bytes instead of an empty value. Whole-partition reads
 // (HGetAll/HKeys/HVals) exclude the reserved meta item (sk == redimo.MetaSK) so
 // it is never surfaced as a hash field.
 
@@ -51,7 +53,7 @@ func (s *redimoStore) HGet(ctx context.Context, pk, field string) ([]byte, bool,
 		return nil, false, err
 	}
 
-	return rv.Bytes(), true, nil
+	return rvBytes(rv), true, nil
 }
 
 func (s *redimoStore) HMGet(ctx context.Context, pk string, fields []string) (map[string][]byte, error) {
@@ -69,7 +71,7 @@ func (s *redimoStore) HMGet(ctx context.Context, pk string, fields []string) (ma
 	out := make(map[string][]byte, len(rvs))
 	for f, rv := range rvs {
 		if !rv.Empty() {
-			out[f] = rv.Bytes()
+			out[f] = rvBytes(rv)
 		}
 	}
 
@@ -88,7 +90,7 @@ func (s *redimoStore) HGetAll(ctx context.Context, pk string) ([]HField, error) 
 
 	out := make([]HField, 0, len(all))
 	for field, rv := range all {
-		out = append(out, HField{Field: field, Value: rv.Bytes()})
+		out = append(out, HField{Field: field, Value: rvBytes(rv)})
 	}
 
 	return out, nil
@@ -151,7 +153,7 @@ func (s *redimoStore) HStrlen(ctx context.Context, pk, field string) (int, error
 		return 0, err
 	}
 
-	return len(rv.Bytes()), nil
+	return len(rvBytes(rv)), nil
 }
 
 func (s *redimoStore) HIncrBy(ctx context.Context, pk, field string, delta int64) (newVal int64, isNew bool, err error) {
@@ -178,7 +180,7 @@ func (s *redimoStore) HIncrBy(ctx context.Context, pk, field string, delta int64
 			oldVal []byte
 		)
 		if existed {
-			oldVal = rv.Bytes()
+			oldVal = rvBytes(rv)
 			cur, gerr = parseStoredInt(oldVal)
 			if gerr != nil {
 				return false, ErrHashNotInteger
@@ -222,7 +224,7 @@ func (s *redimoStore) HIncrByFloat(ctx context.Context, pk, field string, delta 
 			oldVal []byte
 		)
 		if existed {
-			oldVal = rv.Bytes()
+			oldVal = rvBytes(rv)
 			cur, gerr = parseStoredFloat(oldVal)
 			if gerr != nil {
 				return false, ErrHashNotFloat

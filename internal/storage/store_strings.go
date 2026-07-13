@@ -15,7 +15,7 @@ func (s *redimoStore) GetString(ctx context.Context, pk string) ([]byte, bool, e
 		return nil, false, err
 	}
 
-	return rv.Bytes(), true, nil
+	return rvBytes(rv), true, nil
 }
 
 func (s *redimoStore) MGetStrings(ctx context.Context, pks []string) (map[string][]byte, error) {
@@ -35,7 +35,7 @@ func (s *redimoStore) MGetStrings(ctx context.Context, pks []string) (map[string
 	vals := make(map[string][]byte, len(rvs))
 	for pk, rv := range rvs {
 		if !rv.Empty() {
-			vals[pk] = rv.Bytes()
+			vals[pk] = rvBytes(rv)
 		}
 	}
 
@@ -56,7 +56,7 @@ func (s *redimoStore) GetSetString(ctx context.Context, pk string, val []byte) (
 		return nil, false, err
 	}
 
-	return old.Bytes(), true, nil
+	return rvBytes(old), true, nil
 }
 
 func (s *redimoStore) SetStringIfEquals(ctx context.Context, pk string, newVal, oldVal []byte, oldExists bool) (bool, error) {
@@ -88,7 +88,7 @@ func (s *redimoStore) IncrBy(ctx context.Context, pk string, delta int64) (newVa
 		oldExists := !rv.Empty()
 		var oldVal []byte
 		if oldExists {
-			oldVal = rv.Bytes()
+			oldVal = rvBytes(rv)
 			cur, gerr = parseStoredInt(oldVal)
 			if gerr != nil {
 				return false, gerr
@@ -129,7 +129,7 @@ func (s *redimoStore) IncrByFloat(ctx context.Context, pk string, delta float64)
 		oldExists := !rv.Empty()
 		var oldVal []byte
 		if oldExists {
-			oldVal = rv.Bytes()
+			oldVal = rvBytes(rv)
 			cur, gerr = parseStoredFloat(oldVal)
 			if gerr != nil {
 				return false, gerr
