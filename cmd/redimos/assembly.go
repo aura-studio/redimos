@@ -84,7 +84,12 @@ func run(cfg appConfig) error {
 	// credentials provider. When neither is set the AWS SDK default credential/
 	// region chain is used (env AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN, profile,
 	// IAM role) — mode ③.
-	endpointSet := cfg.endpointURL != "" || cfg.endpointPartitionID != ""
+	// Only a custom endpoint URL installs the resolver. A partition id on its own
+	// must NOT: it would build an aws.Endpoint whose URL is "", and that resolver
+	// shadows the SDK's default AWS endpoint — every request then targets "" and
+	// fails ("unsupported protocol scheme"), so the startup backend check would
+	// crash-loop. With no URL, fall through to the default AWS/region resolver.
+	endpointSet := cfg.endpointURL != ""
 	if endpointSet {
 		loadOpts = append(loadOpts, config.WithEndpointResolverWithOptions(
 			aws.EndpointResolverWithOptionsFunc(
