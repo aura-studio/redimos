@@ -5,7 +5,38 @@ import (
 
 	redimo "github.com/aura-studio/redimo"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
+
+// rvBytes coerces a redimo ReturnValue to a Redis byte string regardless of how the
+// value ("val") attribute was physically stored in DynamoDB. redimos itself always
+// writes String/Hash values as Binary (B), so for redimos-native data this is
+// exactly rv.Bytes(). But the SAME table is routinely populated directly by other
+// producers (e.g. a game backend writing via the AWS SDK), which store "val" as
+// String (S) or Number (N) — verified against the redimo_aurora_nano table, whose
+// hash/string values land as S (JSON blobs) and N (timestamps/counters), never B.
+// Reading those with rv.Bytes() alone returns nil and renders an EMPTY value in
+// HGET/HGETALL/HMGET/HSTRLEN/GET/MGET/GETSET (and misparses the HINCRBY/INCRBY
+// numeric read-modify-write). Coerce S→raw bytes and N→its canonical decimal text so
+// the value survives the round-trip; a genuinely absent or non-scalar value still
+// yields nil, preserving the prior behaviour for those.
+func rvBytes(rv redimo.ReturnValue) []byte {
+	switch av := rv.ToAV().(type) {
+	case *ddbtypes.AttributeValueMemberB:
+		return av.Value
+	case *ddbtypes.AttributeValueMemberS:
+		return []byte(av.Value)
+	case *ddbtypes.AttributeValueMemberN:
+		return []byte(av.Value)
+	case *ddbtypes.AttributeValueMemberBOOL:
+		if av.Value {
+			return []byte("1")
+		}
+		return []byte("0")
+	default:
+		return nil
+	}
+}
 
 // v1 line note: redimo v1.6.1 has NO meta item, NO type/cnt/TTL machinery, and NO
 // WRONGTYPE detection. The Store interface is preserved verbatim so the command and
