@@ -20,9 +20,9 @@ func TestInProcessClient_V1Introspection(t *testing.T) {
 	endpoint, table := ddbEndpoint(t)
 	ddb := newDDB(t, endpoint)
 
-	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{Table: table})
+	client, closer, err := redimos.NewClient(ddb, redimos.Options{Table: table})
 	if err != nil {
-		t.Fatalf("NewInProcessClient: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	defer closer.Close()
 	ctx := context.Background()

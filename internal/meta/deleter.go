@@ -84,7 +84,7 @@ type DeleterConfig struct {
 	// is today's asynchronous behaviour — a bounded queue drained by a background
 	// worker — so this field is purely additive and every existing caller is unchanged.
 	//
-	// This is the mode the in-process embedding (redimos.NewInProcessClient) uses so a
+	// This is the mode the in-process embedding (redimos.NewClient) uses so a
 	// DEL is fully synchronous (members reclaimed before DEL returns) and no background
 	// goroutine exists. SyncContext supplies the context handed to process; when nil a
 	// context.Background() is used. Rate limiting (RatePerSecond) and QueueCapacity are

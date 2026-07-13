@@ -28,9 +28,9 @@ func TestCommandCoverage(t *testing.T) {
 	endpoint, table := ddbEndpoint(t)
 	ddb := newDDB(t, endpoint)
 
-	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{Table: table, MultiDB: true})
+	client, closer, err := redimos.NewClient(ddb, redimos.Options{Table: table, MultiDB: true})
 	if err != nil {
-		t.Fatalf("NewInProcessClient: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	defer closer.Close()
 

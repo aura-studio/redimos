@@ -1,5 +1,5 @@
 // Package redimos exposes an in-process embedding of the redimos RESP2/Redis-3.2
-// proxy over DynamoDB. NewInProcessClient returns a standard go-redis client that
+// proxy over DynamoDB. NewClient returns a standard go-redis client that
 // talks to the proxy over an in-memory connection — no TCP, no kernel networking —
 // with synchronous deletes and zero background goroutines.
 //
@@ -10,7 +10,7 @@
 //
 // Typical use:
 //
-//	client, closer, err := redimos.NewInProcessClient(ddb, redimos.Options{
+//	client, closer, err := redimos.NewClient(ddb, redimos.Options{
 //		Table:   "redis-data",
 //		MultiDB: true,
 //	})
@@ -70,7 +70,7 @@ type Options struct {
 	// default) disables the check.
 	MaxCommandBytes int
 
-	// AutoCreate, when true, makes NewInProcessClient create the DynamoDB table
+	// AutoCreate, when true, makes NewClient create the DynamoDB table
 	// with redimo's schema if it does not exist — and otherwise verify the existing
 	// table's schema is redimo-compatible — before the client is returned. It mirrors
 	// the cmd/redimos -auto-create-table flag and needs dynamodb:DescribeTable and (to
@@ -80,7 +80,7 @@ type Options struct {
 	AutoCreate bool
 }
 
-// NewInProcessClient builds an in-process redimos proxy over ddb and returns a
+// NewClient builds an in-process redimos proxy over ddb and returns a
 // standard *redis.Client wired to it through an in-memory connection, an io.Closer
 // that tears the proxy down, and any construction error.
 //
@@ -97,7 +97,7 @@ type Options struct {
 // closes every in-memory connection and ends its serving goroutine; after Close the
 // client should no longer be used (and the caller typically also closes the redis
 // client, though closing the server already severs its conns).
-func NewInProcessClient(ddb *dynamodb.Client, opts Options) (*redis.Client, io.Closer, error) {
+func NewClient(ddb *dynamodb.Client, opts Options) (*redis.Client, io.Closer, error) {
 	// Optional: create the table with redimo's schema if missing, or verify an existing
 	// table's schema is compatible, BEFORE anything else — mirroring the CLI
 	// -auto-create-table flag. Off by default, so a bare embedding touches no

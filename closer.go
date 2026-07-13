@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// inProcessCloser is the io.Closer returned by NewInProcessClient. It owns the
+// inProcessCloser is the io.Closer returned by NewClient. It owns the
 // server-side ends of every in-memory connection go-redis dialed, plus the reused
 // server.Server. Close severs each server-side conn — which makes its per-connection
 // redcon.Serve loop hit EOF and return, ending that serving goroutine — and then
