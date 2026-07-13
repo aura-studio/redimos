@@ -266,9 +266,9 @@ func run(cfg appConfig) error {
 	// --- command: storage-backed router ------------------------------------
 	router := command.NewRouterWithStorage(
 		command.Config{
-			RequirePass: cfg.requirepass,
+			RequirePass:         cfg.requirepass,
 			MultiDB:             cfg.multiDB,
-			Databases:           cfg.databases,
+			DB:                  cfg.databases,
 			MaxCollectionResult: cfg.maxCollectionResult,
 			ScanTimeout:         cfg.scanTimeout,
 		},
