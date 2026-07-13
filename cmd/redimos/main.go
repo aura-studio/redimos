@@ -122,7 +122,11 @@ func parseFlags() appConfig {
 
 func main() {
 	if err := run(parseFlags()); err != nil {
-		log.Fatalf("redimos: %v", err)
+		// "cannot start:" is a stable marker: run() only returns non-nil on a startup
+		// failure (it serves, then shuts down cleanly, returning nil), and this is the
+		// process's only Fatalf — so a supervisor can distinguish this real cause from
+		// benign "redimos: …" lifecycle lines.
+		log.Fatalf("redimos: cannot start: %v", err)
 	}
 }
 
