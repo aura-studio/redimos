@@ -138,3 +138,37 @@ func stringMatchLen(pattern, str []byte) bool {
 	}
 	return p == len(pattern) && s == len(str)
 }
+
+// normalizeMatchPattern implements the proxy's GUI-friendly MATCH convention
+// (bugfix v1-scan-substring-match, Expected Behavior ②): a non-empty pattern
+// that contains NO glob metacharacters is treated as a substring query, i.e.
+// rewritten to *pattern*. GUI search boxes (Tiny RDM et al.) send whatever the
+// user typed; users expect "52023464" to find Game.SettleQueueReadSN[52023464],
+// where strict Redis semantics would require an exact key name.
+//
+// A pattern containing any of '*', '?', '[', or '\' is returned unchanged and
+// keeps its strict Redis stringmatchlen semantics — including an unterminated
+// '[' or a lone '\', which already carry (error-tolerant) meaning in the glob
+// language and must not be second-guessed. The empty pattern is returned
+// unchanged too: wrapping it would turn "matches only the empty key name" into
+// "**" (matches everything), a dangerous widening.
+//
+// The rewrite is byte-safe: metachar detection scans raw bytes, and wrapping
+// only prepends/appends '*', so non-ASCII and binary patterns round-trip
+// byte-exactly.
+func normalizeMatchPattern(pattern []byte) []byte {
+	if len(pattern) == 0 {
+		return pattern
+	}
+	for _, b := range pattern {
+		switch b {
+		case '*', '?', '[', '\\':
+			return pattern
+		}
+	}
+	out := make([]byte, 0, len(pattern)+2)
+	out = append(out, '*')
+	out = append(out, pattern...)
+	out = append(out, '*')
+	return out
+}

@@ -133,3 +133,83 @@ func TestDecodePK(t *testing.T) {
 		t.Errorf("single-db decodePK(0, \"3:bar\") = (%q, %v), want (\"3:bar\", true)", k, ok)
 	}
 }
+
+// TestNormalizeMatchPattern pins the auto-wrap convention (bugfix
+// v1-scan-substring-match): patterns WITHOUT glob metacharacters become
+// *pattern* (substring), everything else is returned byte-identically —
+// including the empty pattern, one-sided stars, and every metacharacter class.
+func TestNormalizeMatchPattern(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// plain text → substring wrap
+		{"plain digits", "52023464", "*52023464*"},
+		{"plain word", "foo", "*foo*"},
+		{"dotted name", "Game.SettleQueueReadSN", "*Game.SettleQueueReadSN*"},
+		{"utf8 text", "订单", "*订单*"},
+		{"binary byte", "a\x00b", "*a\x00b*"},
+
+		// metacharacters → unchanged
+		{"empty stays empty", "", ""},
+		{"leading star", "*52023464", "*52023464"},
+		{"trailing star", "52023464*", "52023464*"},
+		{"both stars", "*52023464*", "*52023464*"},
+		{"collapsed stars", "**", "**"},
+		{"question mark", "user:?", "user:?"},
+		{"char class", "k[AB]", "k[AB]"},
+		{"negated class", "k[^A]*", "k[^A]*"},
+		{"unterminated class", "k[AB", "k[AB"},
+		{"escape", `a\*b`, `a\*b`},
+		{"lone backslash", `a\`, `a\`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := normalizeMatchPattern([]byte(c.in))
+			if string(got) != c.want {
+				t.Errorf("normalizeMatchPattern(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeMatchPatternWrapsForGlob proves the wrapped pattern actually
+// drives the substring behavior through globMatch: the auto-wrapped form of a
+// GUI-typed string hits keys that merely CONTAIN it (prefix/suffix/infix),
+// while strict exact semantics would have missed all three.
+func TestNormalizeMatchPatternWrapsForGlob(t *testing.T) {
+	p := normalizeMatchPattern([]byte("52023464"))
+	for _, key := range []string{
+		"Game.SettleQueueReadSN[52023464]", // infix, bracketed
+		"52023464",                         // the whole key
+		"52023464:extra",                   // prefix
+		"prefix:52023464",                  // suffix
+	} {
+		if !globMatch(p, []byte(key)) {
+			t.Errorf("wrapped pattern %q should match %q", p, key)
+		}
+	}
+	if globMatch(p, []byte("5202346")) {
+		t.Errorf("wrapped pattern %q must not match shorter string %q", p, "5202346")
+	}
+}
+
+// TestGlobMatchSettleQueuePin pins the exact scenario from the bug report
+// (bugfix v1-scan-substring-match): the GUI-issued substring pattern must hit
+// the real production-style key name, and the auto-wrapped plain-text form
+// must behave identically (task 6.2).
+func TestGlobMatchSettleQueuePin(t *testing.T) {
+	const key = "Game.SettleQueueReadSN[52023464]"
+	if !globMatch([]byte("*52023464*"), []byte(key)) {
+		t.Errorf("globMatch(*52023464*, %q) = false, want true", key)
+	}
+	// The normalized plain-text pattern matches the same key byte-for-byte.
+	if !globMatch(normalizeMatchPattern([]byte("52023464")), []byte(key)) {
+		t.Errorf("globMatch(normalize(52023464), %q) = false, want true", key)
+	}
+	// A sibling key with a different queue id must NOT match.
+	if globMatch([]byte("*52023464*"), []byte("Game.SettleQueueReadSN[52023465]")) {
+		t.Error("globMatch(*52023464*, ...[52023465]) = true, want false")
+	}
+}

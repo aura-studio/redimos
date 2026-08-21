@@ -702,7 +702,7 @@ func (r *Router) handleHScan(ctx context.Context, c *server.Conn, args [][]byte)
 	for i := 0; i+1 < len(opts); i += 2 {
 		switch strings.ToUpper(string(opts[i])) {
 		case "MATCH":
-			pattern = opts[i+1]
+			pattern = normalizeMatchPattern(opts[i+1])
 			hasMatch = true
 		case "COUNT":
 			// string2ll semantics (reject leading '+'/zeros), not strconv.Atoi.

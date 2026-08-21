@@ -111,7 +111,6 @@ func readScanReply(t *testing.T, r *bufio.Reader) (string, []string) {
 // TestScanSinglePageTerminates verifies SCAN 0 returns the whole (small) keyspace
 // in a single page and reports the terminating cursor "0". Requirements 3.8, 13.3.
 func TestScanSinglePageTerminates(t *testing.T) {
-	t.Skip("v1 line: SCAN is gated on redimo v1.6.1 (no cursor scan primitive)")
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
 	sendRead(t, conn, r, "SET a 1")
 	sendRead(t, conn, r, "SET b 2")
@@ -131,7 +130,6 @@ func TestScanSinglePageTerminates(t *testing.T) {
 // TestScanEmptyKeyspaceReturnsEmptyArray verifies an empty keyspace yields the
 // terminating cursor and a (non-null) empty keys array. Requirement 13.3.
 func TestScanEmptyKeyspaceReturnsEmptyArray(t *testing.T) {
-	t.Skip("v1 line: SCAN is gated on redimo v1.6.1 (no cursor scan primitive)")
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
 	send(t, conn, "SCAN 0")
 	cursor, keys := readScanReply(t, r)
@@ -146,7 +144,6 @@ func TestScanEmptyKeyspaceReturnsEmptyArray(t *testing.T) {
 // TestScanMatchFilters verifies MATCH applies a proxy-side glob filter to the key
 // names. Requirement 13.4.
 func TestScanMatchFilters(t *testing.T) {
-	t.Skip("v1 line: SCAN is gated on redimo v1.6.1 (no cursor scan primitive)")
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
 	for _, k := range []string{"user:1", "user:2", "order:1", "user:10"} {
 		sendRead(t, conn, r, "SET "+k+" v")
@@ -182,7 +179,9 @@ func TestScanMatchFilters(t *testing.T) {
 // reassembles the ENTIRE keyspace across pages without omission, and terminates at
 // cursor "0". Requirements 13.3, 13.7 (SCAN may repeat but must not omit live keys).
 func TestScanCountPagingCoversKeyspace(t *testing.T) {
-	t.Skip("v1 line: SCAN is gated on redimo v1.6.1 (no cursor scan primitive)")
+	// 3-item backend pages: with the fill loop each COUNT 3 call still returns
+	// exactly one page worth of keys, so the walk takes multiple pages.
+	withScanTuning(t, 3, scanMaxItemsPerCall)
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
 
 	const n = 20
@@ -229,7 +228,6 @@ func TestScanCountPagingCoversKeyspace(t *testing.T) {
 // (evicted, from a restarted instance, or otherwise unknown) is rejected with the
 // byte-for-byte invalid-cursor error. Requirement 13.5.
 func TestScanUnknownCursorIsInvalid(t *testing.T) {
-	t.Skip("v1 line: SCAN is gated on redimo v1.6.1 (no cursor scan primitive)")
 	conn, r := startScanServer(t, newFakeStringStore(), fixedNow(1000))
 	sendRead(t, conn, r, "SET a 1")
 
@@ -248,7 +246,9 @@ func TestScanUnknownCursorIsInvalid(t *testing.T) {
 // SCAN mints another cursor that evicts the first, and replaying the evicted cursor
 // is then rejected with the byte-for-byte invalid-cursor error. Requirement 13.5.
 func TestScanEvictedCursorIsInvalid(t *testing.T) {
-	t.Skip("v1 line: SCAN is gated on redimo v1.6.1 (no cursor scan primitive)")
+	// 2-item backend pages: a COUNT 2 call over 5 keys stops after one page and
+	// mints the continuation cursor this test needs.
+	withScanTuning(t, 2, scanMaxItemsPerCall)
 	store := newFakeStringStore()
 	// Capacity 1: saving a second cursor evicts the first (LRU).
 	reg := scan.New(scan.Config{InstID: scanInstID, Capacity: 1})

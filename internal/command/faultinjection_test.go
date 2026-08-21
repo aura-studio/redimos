@@ -113,7 +113,9 @@ func startScanServerReg(t *testing.T, store storage.Store, reg *scan.Registry, i
 // client restarts the scan from cursor 0 rather than silently losing or repeating
 // the keyspace.
 func TestFaultInjection_InstanceKillInvalidatesCursor(t *testing.T) {
-	t.Skip("v1 line: SCAN is gated on redimo v1.6.1 (no cursor scan primitive)")
+	// 2-item backend pages: a COUNT 2 call over 5 keys stops after one page and
+	// mints the continuation cursor this test needs.
+	withScanTuning(t, 2, scanMaxItemsPerCall)
 	now := fixedNow(1000)
 
 	// --- Instance A: mint a genuine continuation cursor through the SCAN handler.
