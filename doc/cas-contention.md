@@ -8,9 +8,8 @@ doubles to a 0–100ms cap; the final failed attempt does not sleep. With 49 wai
 expected cumulative wait is 2.278s, maximum 4.555s, excluding backend requests.
 The parameter set remains a benchmark candidate, not production acceptance.
 
-INCR/HINCRBY retain Binary reads and compare the physical value, keeping writes Binary.
-APPEND/SETRANGE re-read the physical value before CAS to preserve the comparison
-API. Connection closure in the embedded transport cancels backend context and
+INCR/HINCRBY and APPEND/SETRANGE retain the v2.61.0 Binary conditional comparison,
+without an extra read before CAS. Connection closure in the embedded transport cancels backend context and
 future retries. TCP behavior and default total timeout are unchanged.
 
 Cancellation cannot undo committed writes; lost responses leave results unknown.

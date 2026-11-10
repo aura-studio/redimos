@@ -190,7 +190,7 @@ func (s *redimoStore) HIncrBy(ctx context.Context, pk, field string, delta int64
 		}
 		next := cur + delta
 
-		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, rv, existed)
+		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, redimo.BytesValue{B: oldVal}, existed)
 		if serr != nil {
 			return false, serr
 		}
@@ -237,7 +237,7 @@ func (s *redimoStore) HIncrByFloat(ctx context.Context, pk, field string, delta 
 		next := cur + delta
 
 		out := formatRedisFloat(next)
-		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: out}, rv, existed)
+		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, existed)
 		if serr != nil {
 			return false, serr
 		}

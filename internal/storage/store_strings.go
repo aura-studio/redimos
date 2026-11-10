@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"math"
 	"strconv"
@@ -61,17 +60,7 @@ func (s *redimoStore) GetSetString(ctx context.Context, pk string, val []byte) (
 }
 
 func (s *redimoStore) SetStringIfEquals(ctx context.Context, pk string, newVal, oldVal []byte, oldExists bool) (bool, error) {
-	cl := s.client.WithContext(ctx)
-	rv, err := cl.GET(pk)
-	if err != nil {
-		return false, err
-	}
-	exists := !rv.Empty()
-	if exists != oldExists || (exists && !bytes.Equal(rv.Bytes(), oldVal)) {
-		return false, nil
-	}
-	return cl.SETCAS(pk, redimo.BytesValue{B: newVal}, rv, oldExists)
-
+	return s.client.WithContext(ctx).SETCAS(pk, redimo.BytesValue{B: newVal}, redimo.BytesValue{B: oldVal}, oldExists)
 }
 
 func (s *redimoStore) IncrBy(ctx context.Context, pk string, delta int64) (newVal int64, err error) {
@@ -107,7 +96,7 @@ func (s *redimoStore) IncrBy(ctx context.Context, pk string, delta int64) (newVa
 		}
 		next := cur + delta
 
-		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, rv, oldExists)
+		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, redimo.BytesValue{B: oldVal}, oldExists)
 		if serr != nil {
 			return false, serr
 		}
@@ -149,7 +138,7 @@ func (s *redimoStore) IncrByFloat(ctx context.Context, pk string, delta float64)
 		}
 
 		out := formatRedisFloat(next)
-		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: out}, rv, oldExists)
+		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, oldExists)
 		if serr != nil {
 			return false, serr
 		}
