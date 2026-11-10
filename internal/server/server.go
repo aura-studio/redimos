@@ -131,7 +131,11 @@ func (s *Server) onCommand(rc redcon.Conn, cmd redcon.Command) {
 	s.mu.RUnlock()
 	defer s.inflight.Done()
 
-	s.dispatcher.Dispatch(context.Background(), c, cmd.Args)
+	ctx := context.Background()
+	if conn, ok := rc.NetConn().(interface{ ConnectionContext() context.Context }); ok {
+		ctx = conn.ConnectionContext()
+	}
+	s.dispatcher.Dispatch(ctx, c, cmd.Args)
 }
 
 // onClosed runs when a connection is torn down. The shell keeps no per-server

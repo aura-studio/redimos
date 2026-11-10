@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -105,5 +106,24 @@ func TestCASRetryReturnsErrNotIntegerWithoutRetry(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("casRetry made %d attempts on a parse error, want 1", calls)
+	}
+}
+
+func TestRetryCASCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	err := RetryCAS(ctx, func() (bool, error) { calls++; return true, nil })
+	if !errors.Is(err, context.Canceled) || calls != 0 {
+		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+func TestRetryCASCancelAfterConflict(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	err := RetryCAS(ctx, func() (bool, error) { calls++; cancel(); return false, nil })
+	if !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, calls)
 	}
 }

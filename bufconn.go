@@ -2,6 +2,7 @@ package redimos
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
 	"sync"
@@ -22,8 +23,10 @@ import (
 // Cond). A bufConn reads from one direction and writes to the other; its peer reads
 // and writes the opposite pair, so the two ends form a full-duplex connection.
 type bufConn struct {
-	rd *pipeBuffer // this end reads from here (peer writes into it)
-	wr *pipeBuffer // this end writes into here (peer reads from it)
+	ctx    context.Context
+	cancel context.CancelFunc
+	rd     *pipeBuffer // this end reads from here (peer writes into it)
+	wr     *pipeBuffer // this end writes into here (peer reads from it)
 
 	// Deadlines. A zero time means "no deadline". They are guarded by their own mutex
 	// and consulted by Read/Write via the shared pipeBuffer wakeups.
@@ -39,8 +42,9 @@ type bufConn struct {
 func newBufConnPair() (client, server *bufConn) {
 	a := newPipeBuffer() // client -> server bytes
 	b := newPipeBuffer() // server -> client bytes
-	client = &bufConn{rd: b, wr: a}
-	server = &bufConn{rd: a, wr: b}
+	ctx, cancel := context.WithCancel(context.Background())
+	client = &bufConn{rd: b, wr: a, ctx: ctx, cancel: cancel}
+	server = &bufConn{rd: a, wr: b, ctx: ctx, cancel: cancel}
 	return client, server
 }
 
@@ -147,7 +151,9 @@ func (c *bufConn) Write(p []byte) (int, error) {
 // Close closes BOTH directions of this end, waking any blocked Read/Write on this end
 // and surfacing EOF to the peer's reader. Idempotent-safe: closing an already-closed
 // pipeBuffer just re-broadcasts.
+func (c *bufConn) ConnectionContext() context.Context { return c.ctx }
 func (c *bufConn) Close() error {
+	c.cancel()
 	c.rd.close()
 	c.wr.close()
 	return nil

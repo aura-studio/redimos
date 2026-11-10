@@ -154,43 +154,43 @@ func (r *Router) readStringForRMW(ctx context.Context, pk string) (base, physVal
 // live non-String key is rejected by EnsureType and surfaces as WRONGTYPE. On
 // success it returns the new value's byte length (the integer both commands reply).
 func (r *Router) rmwString(ctx context.Context, pk string, compute func(base []byte) ([]byte, error)) (newLen int, err error) {
-	for attempt := 0; attempt < storage.MaxRMWRetries; attempt++ {
+	var result int
+	err = storage.RetryCAS(ctx, func() (bool, error) {
 		base, physVal, physExists, wrongType, rerr := r.readStringForRMW(ctx, pk)
 		if rerr != nil {
-			return 0, rerr
+			return false, rerr
 		}
 		// A live non-String key is WRONGTYPE — reported BEFORE the compute callback's
 		// value-size guard (Redis' APPEND/SETRANGE run checkType right after lookup,
 		// so a wrong-type key with an oversized value replies WRONGTYPE, not the
 		// size-limit error).
 		if wrongType {
-			return 0, meta.ErrWrongType
+			return false, meta.ErrWrongType
 		}
 
 		next, cerr := compute(base)
 		if cerr != nil {
-			return 0, cerr
+			return false, cerr
 		}
 
 		// EnsureType creates/verifies the String type (rejecting a live non-String
 		// key with WRONGTYPE) before the value write, atomically re-checked each
 		// attempt so a concurrent type change is still caught.
 		if eerr := r.ensureTypeExpiring(ctx, pk, meta.TypeString); eerr != nil {
-			return 0, eerr
+			return false, eerr
 		}
 
 		ok, werr := r.Storage.Store.SetStringIfEquals(ctx, pk, next, physVal, physExists)
 		if werr != nil {
-			return 0, werr
+			return false, werr
 		}
 		if ok {
-			return len(next), nil
+			result = len(next)
+			return true, nil
 		}
-		// Lost the compare-and-set race: another writer changed the value between
-		// the read and the write. Re-read and recompute.
-	}
-
-	return 0, storage.ErrRMWMaxRetries
+		return false, nil
+	})
+	return result, err
 }
 
 // handleAppend implements APPEND key value (requirements 5.10, 16.4): append value

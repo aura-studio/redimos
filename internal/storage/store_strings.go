@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"strconv"
@@ -60,11 +61,17 @@ func (s *redimoStore) GetSetString(ctx context.Context, pk string, val []byte) (
 }
 
 func (s *redimoStore) SetStringIfEquals(ctx context.Context, pk string, newVal, oldVal []byte, oldExists bool) (bool, error) {
-	// The compare-and-set is delegated to the fork's SETCAS, whose DynamoDB
-	// conditional expression asserts the value item still equals oldVal (or is still
-	// absent), so a concurrent writer's change makes the condition fail and SETCAS
-	// returns ok=false without writing.
-	return s.client.WithContext(ctx).SETCAS(pk, redimo.BytesValue{B: newVal}, redimo.BytesValue{B: oldVal}, oldExists)
+	cl := s.client.WithContext(ctx)
+	rv, err := cl.GET(pk)
+	if err != nil {
+		return false, err
+	}
+	exists := !rv.Empty()
+	if exists != oldExists || (exists && !bytes.Equal(rv.Bytes(), oldVal)) {
+		return false, nil
+	}
+	return cl.SETCAS(pk, redimo.BytesValue{B: newVal}, rv, oldExists)
+
 }
 
 func (s *redimoStore) IncrBy(ctx context.Context, pk string, delta int64) (newVal int64, err error) {
@@ -78,7 +85,7 @@ func (s *redimoStore) IncrBy(ctx context.Context, pk string, delta int64) (newVa
 	// exhausts the retry bound surfaces ErrRMWMaxRetries (from casRetry), with
 	// newVal left at its zero value.
 	cl := s.client.WithContext(ctx)
-	err = casRetry(func() (bool, error) {
+	err = RetryCAS(ctx, func() (bool, error) {
 		rv, gerr := cl.GET(pk)
 		if gerr != nil {
 			return false, gerr
@@ -100,7 +107,7 @@ func (s *redimoStore) IncrBy(ctx context.Context, pk string, delta int64) (newVa
 		}
 		next := cur + delta
 
-		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, redimo.BytesValue{B: oldVal}, oldExists)
+		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, rv, oldExists)
 		if serr != nil {
 			return false, serr
 		}
@@ -119,7 +126,7 @@ func (s *redimoStore) IncrByFloat(ctx context.Context, pk string, delta float64)
 	// compare-and-set loop so concurrent INCRBYFLOAT on one key cannot lose an update
 	// (requirements 16.3, 16.4).
 	cl := s.client.WithContext(ctx)
-	err = casRetry(func() (bool, error) {
+	err = RetryCAS(ctx, func() (bool, error) {
 		rv, gerr := cl.GET(pk)
 		if gerr != nil {
 			return false, gerr
@@ -142,7 +149,7 @@ func (s *redimoStore) IncrByFloat(ctx context.Context, pk string, delta float64)
 		}
 
 		out := formatRedisFloat(next)
-		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, oldExists)
+		ok, serr := cl.SETCAS(pk, redimo.BytesValue{B: out}, rv, oldExists)
 		if serr != nil {
 			return false, serr
 		}

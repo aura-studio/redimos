@@ -166,7 +166,7 @@ func (s *redimoStore) HIncrBy(ctx context.Context, pk, field string, delta int64
 	// reflects the pre-state observed on the winning attempt. A run that exhausts
 	// the retry bound surfaces ErrRMWMaxRetries.
 	cl := s.client.WithContext(ctx)
-	err = casRetry(func() (bool, error) {
+	err = RetryCAS(ctx, func() (bool, error) {
 		rv, gerr := cl.HGET(pk, field)
 		if gerr != nil {
 			return false, gerr
@@ -190,7 +190,7 @@ func (s *redimoStore) HIncrBy(ctx context.Context, pk, field string, delta int64
 		}
 		next := cur + delta
 
-		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, redimo.BytesValue{B: oldVal}, existed)
+		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: []byte(strconv.FormatInt(next, 10))}, rv, existed)
 		if serr != nil {
 			return false, serr
 		}
@@ -210,7 +210,7 @@ func (s *redimoStore) HIncrByFloat(ctx context.Context, pk, field string, delta 
 	// compare-and-set loop makes concurrent HINCRBYFLOAT on one field lose no update
 	// (requirements 16.3, 16.4).
 	cl := s.client.WithContext(ctx)
-	err = casRetry(func() (bool, error) {
+	err = RetryCAS(ctx, func() (bool, error) {
 		rv, gerr := cl.HGET(pk, field)
 		if gerr != nil {
 			return false, gerr
@@ -237,7 +237,7 @@ func (s *redimoStore) HIncrByFloat(ctx context.Context, pk, field string, delta 
 		next := cur + delta
 
 		out := formatRedisFloat(next)
-		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: out}, redimo.BytesValue{B: oldVal}, existed)
+		ok, serr := cl.HSETCAS(pk, field, redimo.BytesValue{B: out}, rv, existed)
 		if serr != nil {
 			return false, serr
 		}

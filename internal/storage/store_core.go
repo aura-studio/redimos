@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
+	"time"
 
 	redimo "github.com/aura-studio/redimo/v2"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -133,8 +135,13 @@ func (s *redimoStore) SweepOrphans(ctx context.Context) (int, error) {
 // The loop is bounded by MaxRMWRetries; when every attempt loses its race it
 // returns ErrRMWMaxRetries (pathological hot-key contention) rather than looping
 // forever or silently dropping the write. attempt is always called at least once.
-func casRetry(attempt func() (ok bool, err error)) error {
+// RetryCAS retries only conditional conflicts, respecting cancellation.
+// Cancellation cannot undo a write already committed by the backend.
+func RetryCAS(ctx context.Context, attempt func() (bool, error)) error {
 	for i := 0; i < MaxRMWRetries; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ok, err := attempt()
 		if err != nil {
 			return err
@@ -142,11 +149,19 @@ func casRetry(attempt func() (ok bool, err error)) error {
 		if ok {
 			return nil
 		}
-		// ok=false: the conditional write lost a race with a concurrent writer.
-		// Loop to re-read and recompute on top of the value that actually landed.
+		if i == MaxRMWRetries-1 {
+			break
+		}
+		capDelay := min(5*time.Millisecond<<min(i, 5), 100*time.Millisecond)
+		timer := time.NewTimer(time.Duration(rand.Int64N(int64(capDelay) + 1)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
-
 	rmwExhausted.Add(1)
-
 	return ErrRMWMaxRetries
 }
+func casRetry(attempt func() (bool, error)) error { return RetryCAS(context.Background(), attempt) }
